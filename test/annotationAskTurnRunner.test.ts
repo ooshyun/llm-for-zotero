@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import { buildAnnotationAskRequest } from "../src/modules/annotationAsk/turnRunner";
+import { resetPaperSessionsForTests } from "../src/modules/annotationAsk/paperSessions";
 import type { PaperContextRef } from "../src/shared/types";
 
 function paperContext(
@@ -22,13 +23,15 @@ describe("annotationAsk/turnRunner buildAnnotationAskRequest", function () {
         set: () => {},
       },
     };
+    resetPaperSessionsForTests();
   });
 
   afterEach(function () {
     delete (globalThis as unknown as { Zotero?: unknown }).Zotero;
+    resetPaperSessionsForTests();
   });
 
-  it("carries the stubbed attachment's absolute PDF path as a raw-PDF local document", async function () {
+  it("carries the resolved PDF path in the prompt text with no localDocuments", async function () {
     const request = await buildAnnotationAskRequest(
       {
         title: "Attention Is All You Need",
@@ -36,62 +39,53 @@ describe("annotationAsk/turnRunner buildAnnotationAskRequest", function () {
         highlight: "scaled dot-product attention",
         question: "이게 뭐야?",
         paperContext: paperContext(),
-        annotationItemId: 303,
       },
-      {
-        localPdfResolver: {
-          resolve: async (paperContexts) =>
-            paperContexts.map((paper) =>
-              Object.freeze({
-                kind: "local_pdf" as const,
-                sourceKey:
-                  `zotero-pdf:${paper.itemId}:${paper.contextItemId}` as const,
-                itemId: paper.itemId,
-                contextItemId: paper.contextItemId,
-                title: paper.title,
-                name: "attention.pdf",
-                mimeType: "application/pdf" as const,
-                absolutePath: "/papers/attention.pdf",
-              }),
-            ),
-        },
-      },
+      { resolvePdfPath: async () => "/papers/attention.pdf" },
     );
 
-    assert.lengthOf(request.localDocuments || [], 1);
-    assert.equal(
-      request.localDocuments?.[0].absolutePath,
-      "/papers/attention.pdf",
-    );
-    assert.equal(request.localDocuments?.[0].itemId, 301);
-    assert.equal(request.localDocuments?.[0].contextItemId, 302);
-
-    assert.lengthOf(request.pdfPaperContexts || [], 1);
-    assert.equal(request.pdfPaperContexts?.[0].contentSourceMode, "pdf");
-    assert.equal(request.activePaperContext?.contentSourceMode, "pdf");
+    assert.isUndefined(request.localDocuments);
+    assert.isUndefined(request.pdfPaperContexts);
+    assert.include(request.userText, "/papers/attention.pdf");
+    assert.equal(request.activePaperContext?.itemId, 301);
   });
 
-  it("falls back to metadata-only context when the resolver cannot find a local PDF", async function () {
+  it("omits the read-the-PDF instruction when the path cannot be resolved", async function () {
     const request = await buildAnnotationAskRequest(
       {
         title: "Attention Is All You Need",
         highlight: "scaled dot-product attention",
         question: "이게 뭐야?",
         paperContext: paperContext(),
-        annotationItemId: 303,
       },
-      {
-        localPdfResolver: {
-          resolve: async () => {
-            throw new Error("file missing");
-          },
-        },
-      },
+      { resolvePdfPath: async () => null },
     );
 
     assert.isUndefined(request.localDocuments);
-    assert.isUndefined(request.pdfPaperContexts);
+    assert.notInclude(request.userText, "PDF is at");
     assert.equal(request.activePaperContext?.itemId, 301);
+  });
+
+  it("uses the same conversation key across two requests for the same attachment", async function () {
+    const first = await buildAnnotationAskRequest(
+      {
+        title: "Paper",
+        highlight: "text one",
+        question: "q1",
+        paperContext: paperContext(),
+      },
+      { resolvePdfPath: async () => "/papers/attention.pdf" },
+    );
+    const second = await buildAnnotationAskRequest(
+      {
+        title: "Paper",
+        highlight: "text two",
+        question: "q2",
+        paperContext: paperContext(),
+      },
+      { resolvePdfPath: async () => "/papers/attention.pdf" },
+    );
+
+    assert.equal(first.conversationKey, second.conversationKey);
   });
 
   it("refuses a paper context with no active library", async function () {
@@ -102,9 +96,8 @@ describe("annotationAsk/turnRunner buildAnnotationAskRequest", function () {
           highlight: "text",
           question: "q",
           paperContext: paperContext({ libraryID: undefined }),
-          annotationItemId: 303,
         },
-        { localPdfResolver: { resolve: async () => [] } },
+        { resolvePdfPath: async () => null },
       );
       assert.fail("expected rejection");
     } catch (error) {

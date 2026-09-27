@@ -159,7 +159,6 @@ async function processAsk(
       highlight: annotation.annotationText || "",
       question,
       paperContext,
-      annotationItemId: annotationId,
     });
     await writeFinalState(annotationId, original, { kind: "answered", text });
   } catch (err) {

@@ -1,25 +1,10 @@
-import { appLogger } from "../../core/logging";
 import { getAgentApi } from "../../agent";
 import type { AgentRuntimeRequestInput } from "../../agent/types";
 import { buildClaudeReasoningConfig } from "../../claudeCode/runtime";
 import { getClaudeRuntimeModelPref } from "../../claudeCode/prefs";
-import type {
-  LocalDocumentResource,
-  PaperContextRef,
-} from "../../shared/types";
-import { RUNTIME_CONVERSATION_KEY_END } from "../../shared/conversationKeySpace";
-import { createLocalPdfResourceResolver } from "../contextPanel/setupHandlers/controllers/localPdfResourceResolver";
+import type { PaperContextRef } from "../../shared/types";
+import { sessionFor } from "./paperSessions";
 import { buildPrompt } from "./commentProtocol";
-
-const CONVERSATION_KEY_BASE =
-  RUNTIME_CONVERSATION_KEY_END + 2_000_000_000_000_000;
-
-export function buildAnnotationAskConversationKey(
-  annotationItemId: number,
-): number {
-  const normalized = Math.max(0, Math.floor(annotationItemId) || 0);
-  return CONVERSATION_KEY_BASE + normalized;
-}
 
 export type AnnotationAskTurnInput = {
   title: string;
@@ -27,48 +12,46 @@ export type AnnotationAskTurnInput = {
   highlight: string;
   question: string;
   paperContext: PaperContextRef;
-  annotationItemId: number;
 };
 
 export type AnnotationAskTurnRunner = (
   input: AnnotationAskTurnInput,
 ) => Promise<string>;
 
-export type AnnotationAskLocalPdfResolver = {
-  resolve: (
-    paperContexts: PaperContextRef[],
-  ) => Promise<readonly LocalDocumentResource[]>;
-};
+export type AnnotationAskPdfPathResolver = (
+  attachmentId: number,
+) => Promise<string | null>;
+
+async function resolveAttachmentPdfPath(
+  attachmentId: number,
+): Promise<string | null> {
+  const attachment = Zotero.Items.get(attachmentId) as
+    | (Zotero.Item & { getFilePathAsync?: () => Promise<string | false> })
+    | null;
+  if (!attachment) return null;
+  try {
+    const path = await attachment.getFilePathAsync?.();
+    return typeof path === "string" && path ? path : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function buildAnnotationAskRequest(
   input: AnnotationAskTurnInput,
-  deps: { localPdfResolver?: AnnotationAskLocalPdfResolver } = {},
+  deps: { resolvePdfPath?: AnnotationAskPdfPathResolver } = {},
 ): Promise<AgentRuntimeRequestInput> {
   const libraryID = input.paperContext.libraryID;
   if (!libraryID) {
     throw new Error("Paper has no active Zotero library");
   }
 
-  const pdfPaperContext: PaperContextRef = {
-    ...input.paperContext,
-    contentSourceMode: "pdf",
-  };
-
-  const resolver = deps.localPdfResolver || createLocalPdfResourceResolver();
-  let localDocuments: readonly LocalDocumentResource[] = [];
-  try {
-    localDocuments = await resolver.resolve([pdfPaperContext]);
-  } catch (err) {
-    appLogger.warn(
-      "Annotation ask: could not resolve the raw PDF path; falling back to metadata-only paper context",
-      err,
-    );
-  }
-
-  const hasLocalPdf = localDocuments.length > 0;
+  const resolvePdfPath = deps.resolvePdfPath || resolveAttachmentPdfPath;
+  const pdfPath = await resolvePdfPath(input.paperContext.contextItemId);
 
   return {
-    conversationKey: buildAnnotationAskConversationKey(input.annotationItemId),
+    conversationKey: sessionFor(input.paperContext.contextItemId)
+      .conversationKey,
     mode: "agent",
     conversationKind: "paper",
     userText: buildPrompt({
@@ -76,12 +59,11 @@ export async function buildAnnotationAskRequest(
       pageLabel: input.pageLabel,
       highlight: input.highlight,
       question: input.question,
+      pdfPath,
     }),
     activeItemId: input.paperContext.itemId,
     libraryID,
-    activePaperContext: hasLocalPdf ? pdfPaperContext : input.paperContext,
-    pdfPaperContexts: hasLocalPdf ? [pdfPaperContext] : undefined,
-    localDocuments: hasLocalPdf ? localDocuments : undefined,
+    activePaperContext: input.paperContext,
     selectedTexts: [input.highlight],
     model: getClaudeRuntimeModelPref(),
     reasoning: buildClaudeReasoningConfig(),

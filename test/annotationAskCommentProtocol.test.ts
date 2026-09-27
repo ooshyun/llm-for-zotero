@@ -154,6 +154,7 @@ describe("annotationAsk/commentProtocol", function () {
         pageLabel: "3",
         highlight: "scaled dot-product attention",
         question: "이게 뭐야?",
+        pdfPath: "/papers/attention.pdf",
       });
       assert.include(prompt, "Attention Is All You Need");
       assert.include(prompt, "scaled dot-product attention");
@@ -162,23 +163,46 @@ describe("annotationAsk/commentProtocol", function () {
       assert.include(prompt, "Korean");
     });
 
-    it("tells Claude to read the pages around the highlight's page", function () {
+    it("tells Claude the PDF path and to read the pages around the highlight's page", function () {
       const prompt = buildPrompt({
         title: "Paper",
         pageLabel: "7",
         highlight: "text",
         question: "q",
+        pdfPath: "/papers/attention.pdf",
       });
-      assert.include(prompt, "read the PDF pages around page 7");
+      assert.include(prompt, "/papers/attention.pdf");
+      assert.include(prompt, "the pages around page 7");
     });
 
-    it("omits the page label and the read-around instruction when absent", function () {
+    it("says the conversation continues across highlights in the same paper", function () {
       const prompt = buildPrompt({
         title: "Paper",
         highlight: "text",
         question: "q",
+        pdfPath: "/papers/attention.pdf",
       });
-      assert.notInclude(prompt, "page");
+      assert.include(prompt, "continues across every @claude question");
+    });
+
+    it("omits the PDF path instruction when the path cannot be resolved", function () {
+      const prompt = buildPrompt({
+        title: "Paper",
+        highlight: "text",
+        question: "q",
+        pdfPath: null,
+      });
+      assert.notInclude(prompt, "PDF is at");
+    });
+
+    it("omits the page label when absent", function () {
+      const prompt = buildPrompt({
+        title: "Paper",
+        highlight: "text",
+        question: "q",
+        pdfPath: null,
+      });
+      assert.notInclude(prompt, "(page");
     });
   });
 });

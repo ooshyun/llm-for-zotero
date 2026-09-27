@@ -94,10 +94,14 @@ export function buildPrompt(params: {
   pageLabel?: string;
   highlight: string;
   question: string;
+  pdfPath: string | null;
 }): string {
   const location = params.pageLabel ? ` (page ${params.pageLabel})` : "";
-  const readAround = params.pageLabel
-    ? ` Before answering, read the PDF pages around page ${params.pageLabel} (where the highlight sits) for surrounding context — do not rely on the quoted snippet alone.`
+  const wherePages = params.pageLabel
+    ? `the pages around page ${params.pageLabel} (where the highlight sits)`
+    : "the pages around the highlight";
+  const readAround = params.pdfPath
+    ? ` The paper's PDF is at ${params.pdfPath}. If you have not already read ${wherePages} earlier in this conversation, read them now for surrounding context — do not rely on the quoted snippet alone.`
     : "";
   return [
     `You are answering a question about a highlighted passage from the paper "${params.title}"${location}.`,
@@ -107,6 +111,7 @@ export function buildPrompt(params: {
     `"""`,
     `Question: ${params.question}`,
     ``,
+    `This conversation continues across every @claude question on this paper for as long as its reader tab stays open, so treat earlier questions and answers here as context.`,
     `Answer in Korean. Write plain text only: this answer is written back into a Zotero annotation comment, which does not render Markdown, so do not use Markdown syntax (no #, *, -, backticks, etc). Keep the whole answer under about 1500 characters. Put any URL alone on its own line, and only include a URL you actually retrieved with a web tool during this turn; never invent one.${readAround} Output only the answer text itself, with no preamble, labels, or restatement of the question.`,
   ].join("\n");
 }
