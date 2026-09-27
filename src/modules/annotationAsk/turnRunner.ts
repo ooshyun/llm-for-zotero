@@ -1,7 +1,13 @@
+import { appLogger } from "../../core/logging";
 import { getAgentApi } from "../../agent";
+import type { AgentRuntimeRequestInput } from "../../agent/types";
 import { buildClaudeReasoningConfig } from "../../claudeCode/runtime";
 import { getClaudeRuntimeModelPref } from "../../claudeCode/prefs";
-import type { PaperContextRef } from "../../shared/types";
+import type {
+  LocalDocumentResource,
+  PaperContextRef,
+} from "../../shared/types";
+import { createLocalPdfResourceResolver } from "../contextPanel/setupHandlers/controllers/localPdfResourceResolver";
 import { buildPrompt } from "./commentProtocol";
 
 /**
@@ -32,6 +38,74 @@ export type AnnotationAskTurnRunner = (
   input: AnnotationAskTurnInput,
 ) => Promise<string>;
 
+export type AnnotationAskLocalPdfResolver = {
+  resolve: (
+    paperContexts: PaperContextRef[],
+  ) => Promise<readonly LocalDocumentResource[]>;
+};
+
+/**
+ * Builds the turn request for one annotation question, reusing the sidebar
+ * chat's own raw-PDF resolver (`createLocalPdfResourceResolver`, also used by
+ * `src/modules/contextPanel/chat.ts:6724,8417`) instead of a second one. That
+ * resolver turns a `contentSourceMode: "pdf"` paper context into the
+ * `LocalDocumentResource` (`absolutePath` from `getFilePathAsync()`) the
+ * bridge's "Raw PDF transport policy" block and "Selected papers" list need —
+ * without it, only `activePaperContext`'s title/citation metadata reaches the
+ * bridge prompt, not the file the model can actually read.
+ *
+ * When the resolver fails (file missing, not a real PDF, etc.) this falls
+ * back to the metadata-only paper context rather than failing the whole
+ * annotation turn.
+ */
+export async function buildAnnotationAskRequest(
+  input: AnnotationAskTurnInput,
+  deps: { localPdfResolver?: AnnotationAskLocalPdfResolver } = {},
+): Promise<AgentRuntimeRequestInput> {
+  const libraryID = input.paperContext.libraryID;
+  if (!libraryID) {
+    throw new Error("Paper has no active Zotero library");
+  }
+
+  const pdfPaperContext: PaperContextRef = {
+    ...input.paperContext,
+    contentSourceMode: "pdf",
+  };
+
+  const resolver = deps.localPdfResolver || createLocalPdfResourceResolver();
+  let localDocuments: readonly LocalDocumentResource[] = [];
+  try {
+    localDocuments = await resolver.resolve([pdfPaperContext]);
+  } catch (err) {
+    appLogger.warn(
+      "Annotation ask: could not resolve the raw PDF path; falling back to metadata-only paper context",
+      err,
+    );
+  }
+
+  const hasLocalPdf = localDocuments.length > 0;
+
+  return {
+    conversationKey: buildAnnotationAskConversationKey(input.annotationItemId),
+    mode: "agent",
+    conversationKind: "paper",
+    userText: buildPrompt({
+      title: input.title,
+      pageLabel: input.pageLabel,
+      highlight: input.highlight,
+      question: input.question,
+    }),
+    activeItemId: input.paperContext.itemId,
+    libraryID,
+    activePaperContext: hasLocalPdf ? pdfPaperContext : input.paperContext,
+    pdfPaperContexts: hasLocalPdf ? [pdfPaperContext] : undefined,
+    localDocuments: hasLocalPdf ? localDocuments : undefined,
+    selectedTexts: [input.highlight],
+    model: getClaudeRuntimeModelPref(),
+    reasoning: buildClaudeReasoningConfig(),
+  };
+}
+
 /**
  * Runs one Claude turn for an annotation `@claude` question through the
  * shared agent runtime — `getAgentApi().runTurn`, the same entry point the
@@ -45,28 +119,8 @@ export type AnnotationAskTurnRunner = (
  * trace isolated per annotation.
  */
 export const runAnnotationAskTurn: AnnotationAskTurnRunner = async (input) => {
-  const libraryID = input.paperContext.libraryID;
-  if (!libraryID) {
-    throw new Error("Paper has no active Zotero library");
-  }
-
-  const outcome = await getAgentApi().runTurn({
-    conversationKey: buildAnnotationAskConversationKey(input.annotationItemId),
-    mode: "agent",
-    conversationKind: "paper",
-    userText: buildPrompt({
-      title: input.title,
-      pageLabel: input.pageLabel,
-      highlight: input.highlight,
-      question: input.question,
-    }),
-    activeItemId: input.paperContext.itemId,
-    libraryID,
-    activePaperContext: input.paperContext,
-    selectedTexts: [input.highlight],
-    model: getClaudeRuntimeModelPref(),
-    reasoning: buildClaudeReasoningConfig(),
-  });
+  const request = await buildAnnotationAskRequest(input);
+  const outcome = await getAgentApi().runTurn(request);
 
   if (outcome.kind === "completed") return outcome.text;
   throw new Error(outcome.reason || "Claude turn did not complete");
