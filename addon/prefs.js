@@ -82,3 +82,4 @@ pref("mineruGlobalAutoParse", false);
 pref("mineruSyncEnabled", false);
 pref("mineruMaxAutoPages", 200);
 pref("mineruExcludePatterns", "");
+pref("annotationAskEnabled", false);
