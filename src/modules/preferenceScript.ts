@@ -238,6 +238,10 @@ import {
   setClaudeBlockStreamingEnabled,
 } from "../claudeCode/prefs";
 import {
+  isAnnotationAskEnabled,
+  setAnnotationAskEnabled,
+} from "./annotationAsk/prefs";
+import {
   buildClaudeModelPreferenceOptions,
   CLAUDE_CUSTOMIZED_MODEL_OPTION_KEY,
   fetchClaudeModelCatalog,
@@ -3067,6 +3071,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   const claudeCodeBlockStreamingInput = doc.querySelector(
     `#${config.addonRef}-claude-code-block-streaming`,
   ) as HTMLInputElement | null;
+  const annotationAskEnabledInput = doc.querySelector(
+    `#${config.addonRef}-annotation-ask-enabled`,
+  ) as HTMLInputElement | null;
   const claudeCodeAutoCompactInput = doc.querySelector(
     `#${config.addonRef}-claude-code-auto-compact`,
   ) as HTMLInputElement | null;
@@ -4522,6 +4529,13 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     claudeCodeBlockStreamingInput.checked = isClaudeBlockStreamingEnabled();
     claudeCodeBlockStreamingInput.addEventListener("change", () => {
       setClaudeBlockStreamingEnabled(claudeCodeBlockStreamingInput.checked);
+    });
+  }
+
+  if (annotationAskEnabledInput) {
+    annotationAskEnabledInput.checked = isAnnotationAskEnabled();
+    annotationAskEnabledInput.addEventListener("change", () => {
+      setAnnotationAskEnabled(annotationAskEnabledInput.checked);
     });
   }
 
