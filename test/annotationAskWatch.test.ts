@@ -13,7 +13,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Long enough for the debounce timer to fire and the queued turn to settle. */
 async function waitPastDebounce(): Promise<void> {
   await sleep(TEST_DEBOUNCE_MS + 40);
 }
@@ -315,12 +314,9 @@ describe("annotationAsk/watch", function () {
       return "이건 셀프 어텐션입니다.";
     });
 
-    // First keystroke-driven autosave: a half-typed question.
     handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
     await sleep(TEST_DEBOUNCE_MS / 2);
 
-    // Still well within the debounce window: this restarts the timer instead
-    // of stacking a second turn, and only the settled text is ever read.
     annotation.annotationComment = "@claude 이게 뭐야?";
     handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
 
@@ -346,8 +342,6 @@ describe("annotationAsk/watch", function () {
     setupZotero(items);
 
     setAnnotationAskTurnRunnerForTests(async () => {
-      // Simulate the user typing more into the comment while the turn is
-      // still running — Zotero's own autosave, arriving mid-flight.
       annotation.annotationComment =
         "@claude 요약해줘 (급함)\n\nClaude: 답변 작성 중...";
       return "요약입니다.";

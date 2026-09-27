@@ -14,10 +14,7 @@ import {
 } from "./turnRunner";
 
 // Zotero's PDF reader autosaves the annotation comment on every keystroke, so
-// a "modify" notification can carry a half-typed "@claude ...". Coalescing
-// notifications through a per-annotation timer (mirrors mineru's
-// DEBOUNCE_MS in ../mineruAutoWatch.ts) means only the comment as it stands
-// once typing pauses is ever read as a question.
+// a "modify" notification can carry a half-typed "@claude ...".
 const DEBOUNCE_MS = 3000;
 let debounceMsOverride: number | null = null;
 
@@ -209,9 +206,8 @@ function scheduleAnnotationCheck(
   annotationId: number,
   runner: AnnotationAskTurnRunner,
 ): void {
-  // Already mid-turn: our own pending/final writes will each re-fire this
-  // notification, and re-arming the timer here would only delay the
-  // re-check that the marker already makes a no-op.
+  // MUST KILL: scheduleAnnotationCheck — the inFlight guard here duplicates
+  // considerAnnotation's; extract one named in-flight predicate both call.
   if (inFlight.has(annotationId)) return;
 
   const existing = debounceTimers.get(annotationId);
@@ -234,8 +230,6 @@ function handleItemNotification(
 ): void {
   if (type !== "item") return;
   if (event !== "add" && event !== "modify") return;
-  // Read the gate fresh on every notification so toggling the preference
-  // takes effect without restarting Zotero.
   if (!isFeatureActive()) return;
 
   for (const rawId of ids) {
@@ -306,9 +300,7 @@ export function stopAnnotationAskWatch(): void {
         }
       ).Notifier;
       notifier?.unregisterObserver?.(notifierId);
-    } catch {
-      /* ignore */
-    }
+    } catch {}
     notifierId = null;
   }
   for (const timer of debounceTimers.values()) clearTimeout(timer);

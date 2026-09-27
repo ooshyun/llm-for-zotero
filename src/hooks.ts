@@ -593,9 +593,7 @@ async function onShutdown(): Promise<void> {
   try {
     const { stopAnnotationAskWatch } = require("./modules/annotationAsk/watch");
     stopAnnotationAskWatch();
-  } catch {
-    /* ignore if module not loaded */
-  }
+  } catch {}
   try {
     const { shutdownAgentSubsystem } = require("./agent");
     shutdownAgentSubsystem();

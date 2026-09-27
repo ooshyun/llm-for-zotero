@@ -1,8 +1,3 @@
-/**
- * Pure parsing/rendering for the `@claude` annotation-comment protocol.
- * No Zotero dependency — the comment string is the entire persistent state.
- */
-
 export const TRIGGER = /@claude\b/i;
 
 const ANSWER_MARKER = "\n\nClaude:";
@@ -26,12 +21,7 @@ export type ParsedAsk = {
   original: string;
 };
 
-/**
- * Detects a fresh `@claude` request. Returns null when the trigger is absent,
- * or when the answer marker is already present — the marker makes every
- * downstream state (pending/answered/failed) a no-op re-trigger, so the user
- * must delete the Claude block to ask again.
- */
+/** Returns null when there is no `@claude` trigger, or an answer marker already exists. */
 export function parseAsk(comment: string): ParsedAsk | null {
   if (!TRIGGER.test(comment)) return null;
   if (comment.includes(ANSWER_MARKER)) return null;
@@ -76,15 +66,9 @@ function replaceFirst(
 }
 
 /**
- * The turn can take many seconds, and Zotero's reader autosaves the comment
- * field as the user types, so the comment holding the pending write can
- * change before the final one lands. Re-reading and reconciling instead of
- * blindly overwriting keeps whatever the user did in the meantime:
- *   - unchanged since the pending write -> render normally from `original`.
- *   - still carries the pending block, just with other edits around it ->
- *     replace only that block, leaving the edits.
- *   - the pending block is gone (the user deleted it, or the whole comment
- *     changed) -> append the final block to whatever is there now.
+ * Zotero's reader autosaves the annotation comment as the user types, so the
+ * comment can change between the pending write and the final one landing;
+ * this reconciles instead of blindly overwriting.
  */
 export function reconcileFinalComment(params: {
   original: string;
