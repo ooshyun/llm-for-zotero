@@ -206,10 +206,6 @@ function scheduleAnnotationCheck(
   annotationId: number,
   runner: AnnotationAskTurnRunner,
 ): void {
-  // MUST KILL: scheduleAnnotationCheck — the inFlight guard here duplicates
-  // considerAnnotation's; extract one named in-flight predicate both call.
-  if (inFlight.has(annotationId)) return;
-
   const existing = debounceTimers.get(annotationId);
   if (existing) clearTimeout(existing);
 

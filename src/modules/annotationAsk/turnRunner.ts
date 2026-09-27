@@ -7,11 +7,12 @@ import type {
   LocalDocumentResource,
   PaperContextRef,
 } from "../../shared/types";
+import { RUNTIME_CONVERSATION_KEY_END } from "../../shared/conversationKeySpace";
 import { createLocalPdfResourceResolver } from "../contextPanel/setupHandlers/controllers/localPdfResourceResolver";
 import { buildPrompt } from "./commentProtocol";
 
-// MUST KILL: CONVERSATION_KEY_BASE should derive from RUNTIME_CONVERSATION_KEY_END, not restate it.
-const CONVERSATION_KEY_BASE = 9_000_000_000_000_000;
+const CONVERSATION_KEY_BASE =
+  RUNTIME_CONVERSATION_KEY_END + 2_000_000_000_000_000;
 
 export function buildAnnotationAskConversationKey(
   annotationItemId: number,
