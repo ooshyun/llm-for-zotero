@@ -2,6 +2,8 @@ import { assert } from "chai";
 import {
   buildPrompt,
   parseAsk,
+  reconcileFinalComment,
+  renderAskBlock,
   renderComment,
   TRIGGER,
 } from "../src/modules/annotationAsk/commentProtocol";
@@ -79,6 +81,72 @@ describe("annotationAsk/commentProtocol", function () {
     });
   });
 
+  describe("renderAskBlock", function () {
+    it("renders just the appended block for each state", function () {
+      assert.equal(
+        renderAskBlock({ kind: "pending" }),
+        "\n\nClaude: 답변 작성 중...",
+      );
+      assert.equal(
+        renderAskBlock({ kind: "answered", text: "요약입니다." }),
+        "\n\nClaude:\n요약입니다.",
+      );
+      assert.equal(
+        renderAskBlock({ kind: "failed", reason: "타임아웃" }),
+        "\n\nClaude: 실패 (타임아웃). 이 블록을 지우면 다시 시도합니다.",
+      );
+    });
+  });
+
+  describe("reconcileFinalComment", function () {
+    const original = "@claude 요약해줘";
+    const pendingComment = "@claude 요약해줘\n\nClaude: 답변 작성 중...";
+
+    it("renders normally when the comment is unchanged since the pending write", function () {
+      assert.equal(
+        reconcileFinalComment({
+          original,
+          currentComment: pendingComment,
+          finalState: { kind: "answered", text: "요약입니다." },
+        }),
+        "@claude 요약해줘\n\nClaude:\n요약입니다.",
+      );
+    });
+
+    it("replaces only the pending block when the user edited around it", function () {
+      assert.equal(
+        reconcileFinalComment({
+          original,
+          currentComment: "@claude 요약해줘 (급함)\n\nClaude: 답변 작성 중...",
+          finalState: { kind: "answered", text: "요약입니다." },
+        }),
+        "@claude 요약해줘 (급함)\n\nClaude:\n요약입니다.",
+      );
+    });
+
+    it("appends the block when the pending block is gone entirely", function () {
+      assert.equal(
+        reconcileFinalComment({
+          original,
+          currentComment: "@claude 요약해줘 그리고 결론도",
+          finalState: { kind: "answered", text: "요약입니다." },
+        }),
+        "@claude 요약해줘 그리고 결론도\n\nClaude:\n요약입니다.",
+      );
+    });
+
+    it("reconciles a failed state the same way", function () {
+      assert.equal(
+        reconcileFinalComment({
+          original,
+          currentComment: "@claude 요약해줘 (급함)\n\nClaude: 답변 작성 중...",
+          finalState: { kind: "failed", reason: "타임아웃" },
+        }),
+        "@claude 요약해줘 (급함)\n\nClaude: 실패 (타임아웃). 이 블록을 지우면 다시 시도합니다.",
+      );
+    });
+  });
+
   describe("buildPrompt", function () {
     it("includes the title, highlight, and question", function () {
       const prompt = buildPrompt({
@@ -94,7 +162,17 @@ describe("annotationAsk/commentProtocol", function () {
       assert.include(prompt, "Korean");
     });
 
-    it("omits the page label when absent", function () {
+    it("tells Claude to read the pages around the highlight's page", function () {
+      const prompt = buildPrompt({
+        title: "Paper",
+        pageLabel: "7",
+        highlight: "text",
+        question: "q",
+      });
+      assert.include(prompt, "read the PDF pages around page 7");
+    });
+
+    it("omits the page label and the read-around instruction when absent", function () {
       const prompt = buildPrompt({
         title: "Paper",
         highlight: "text",
