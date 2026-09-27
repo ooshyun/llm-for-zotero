@@ -1,10 +1,15 @@
 import { assert } from "chai";
 import {
   handleAnnotationAskNotificationForTests,
+  handleAnnotationAskTabNotificationForTests,
   resetAnnotationAskWatchForTests,
   setAnnotationAskDebounceMsForTests,
   setAnnotationAskTurnRunnerForTests,
 } from "../src/modules/annotationAsk/watch";
+import {
+  resetPaperSessionsForTests,
+  sessionFor,
+} from "../src/modules/annotationAsk/paperSessions";
 import type { AnnotationAskTurnInput } from "../src/modules/annotationAsk/turnRunner";
 
 const TEST_DEBOUNCE_MS = 20;
@@ -111,6 +116,7 @@ describe("annotationAsk/watch", function () {
 
   afterEach(function () {
     resetAnnotationAskWatchForTests();
+    resetPaperSessionsForTests();
     delete (globalThis as unknown as { Zotero?: unknown }).Zotero;
   });
 
@@ -354,5 +360,102 @@ describe("annotationAsk/watch", function () {
       annotation.annotationComment,
       "@claude 요약해줘 (급함)\n\nClaude:\n요약입니다.",
     );
+  });
+
+  it("gives two annotations on the same attachment the same conversation key", async function () {
+    const parent = createParent();
+    const pdf = createPdf();
+    const annotationA = createAnnotation(303, 302, "@claude 첫번째");
+    const annotationB = createAnnotation(304, 302, "@claude 두번째");
+    const items = new Map<number, MockItem>([
+      [parent.id, parent],
+      [pdf.id, pdf],
+      [annotationA.id, annotationA],
+      [annotationB.id, annotationB],
+    ]);
+    setupZotero(items);
+
+    const conversationKeys: number[] = [];
+    setAnnotationAskTurnRunnerForTests(async (input) => {
+      conversationKeys.push(
+        sessionFor(input.paperContext.contextItemId).conversationKey,
+      );
+      return "답변";
+    });
+
+    handleAnnotationAskNotificationForTests("modify", "item", [annotationA.id]);
+    await waitPastDebounce();
+    handleAnnotationAskNotificationForTests("modify", "item", [annotationB.id]);
+    await waitPastDebounce();
+
+    assert.lengthOf(conversationKeys, 2);
+    assert.equal(conversationKeys[0], conversationKeys[1]);
+  });
+
+  it("gives a different conversation key after a tab close notification in between", async function () {
+    const parent = createParent();
+    const pdf = createPdf();
+    const annotationA = createAnnotation(303, 302, "@claude 첫번째");
+    const annotationB = createAnnotation(304, 302, "@claude 두번째");
+    const items = new Map<number, MockItem>([
+      [parent.id, parent],
+      [pdf.id, pdf],
+      [annotationA.id, annotationA],
+      [annotationB.id, annotationB],
+    ]);
+    setupZotero(items);
+
+    handleAnnotationAskTabNotificationForTests("add", ["tab-1"], {
+      "tab-1": { itemID: pdf.id, type: "reader" },
+    });
+
+    const conversationKeys: number[] = [];
+    setAnnotationAskTurnRunnerForTests(async (input) => {
+      conversationKeys.push(
+        sessionFor(input.paperContext.contextItemId).conversationKey,
+      );
+      return "답변";
+    });
+
+    handleAnnotationAskNotificationForTests("modify", "item", [annotationA.id]);
+    await waitPastDebounce();
+
+    handleAnnotationAskTabNotificationForTests("close", ["tab-1"]);
+
+    handleAnnotationAskNotificationForTests("modify", "item", [annotationB.id]);
+    await waitPastDebounce();
+
+    assert.lengthOf(conversationKeys, 2);
+    assert.notEqual(conversationKeys[0], conversationKeys[1]);
+  });
+
+  it("opens the paper session on a reader tab add for the next annotation to reuse", async function () {
+    const parent = createParent();
+    const pdf = createPdf();
+    const annotation = createAnnotation();
+    const items = new Map<number, MockItem>([
+      [parent.id, parent],
+      [pdf.id, pdf],
+      [annotation.id, annotation],
+    ]);
+    setupZotero(items);
+
+    handleAnnotationAskTabNotificationForTests("add", ["tab-1"], {
+      "tab-1": { itemID: pdf.id, type: "reader" },
+    });
+    const expectedKey = sessionFor(pdf.id).conversationKey;
+
+    let observedKey: number | null = null;
+    setAnnotationAskTurnRunnerForTests(async (input) => {
+      observedKey = sessionFor(
+        input.paperContext.contextItemId,
+      ).conversationKey;
+      return "답변";
+    });
+
+    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
+    await waitPastDebounce();
+
+    assert.equal(observedKey, expectedKey);
   });
 });

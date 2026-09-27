@@ -7,6 +7,7 @@ import {
   renderComment,
   type FinalAskState,
 } from "./commentProtocol";
+import { closePaperSession, openPaperSession } from "./paperSessions";
 import { isAnnotationAskEnabled } from "./prefs";
 import {
   runAnnotationAskTurn,
@@ -44,10 +45,16 @@ function isFeatureActive(): boolean {
 }
 
 let notifierId: string | null = null;
+let tabNotifierId: string | null = null;
 let activeRunner: AnnotationAskTurnRunner = runAnnotationAskTurn;
 const inFlight = new Set<number>();
 const debounceTimers = new Map<number, ReturnType<typeof setTimeout>>();
 let queue: Promise<void> = Promise.resolve();
+
+// Zotero's "close" tab notification carries no per-tab data (see
+// handleTabNotification), so the attachment a closing tab belonged to must
+// be resolved from what its "add" notification recorded.
+const tabAttachmentIds = new Map<string, number>();
 
 function normalizeItemId(id: string | number): number | null {
   const parsed = typeof id === "string" ? parseInt(id, 10) : id;
@@ -235,39 +242,80 @@ function handleItemNotification(
   }
 }
 
+/**
+ * A reader tab's "add" notification carries { itemID, type } keyed by tab id
+ * (Zotero_Tabs.add -> Notifier.trigger('add', 'tab', [id], { [id]: { ...data,
+ * type } })), so the attachment a tab belongs to is known up front. A "close"
+ * notification carries no such data (Notifier.trigger('close', 'tab',
+ * [closedIDs], true)), so it can only resolve the attachment through what
+ * "add" recorded.
+ */
+function handleTabNotification(
+  event: string,
+  type: string,
+  ids: Array<string | number>,
+  extraData: Record<string, unknown>,
+): void {
+  if (type !== "tab") return;
+
+  if (event === "add") {
+    for (const rawId of ids) {
+      const tabId = String(rawId);
+      const data = extraData?.[tabId] as
+        | { itemID?: unknown; type?: unknown }
+        | undefined;
+      if (data?.type !== "reader") continue;
+      const rawItemId = data.itemID;
+      if (typeof rawItemId !== "string" && typeof rawItemId !== "number") {
+        continue;
+      }
+      const attachmentId = normalizeItemId(rawItemId);
+      if (attachmentId === null) continue;
+      tabAttachmentIds.set(tabId, attachmentId);
+      openPaperSession(attachmentId);
+    }
+    return;
+  }
+
+  if (event !== "close") return;
+  for (const rawId of ids) {
+    const tabId = String(rawId);
+    const attachmentId = tabAttachmentIds.get(tabId);
+    tabAttachmentIds.delete(tabId);
+    if (attachmentId !== undefined) closePaperSession(attachmentId);
+  }
+}
+
+type ZoteroNotifier = {
+  registerObserver?: (
+    observer: {
+      notify: (
+        event: string,
+        type: string,
+        ids: unknown[],
+        extraData: Record<string, unknown>,
+      ) => void;
+    },
+    types: string[],
+    id?: string,
+  ) => string;
+  unregisterObserver?: (id: string) => void;
+};
+
+function getZoteroNotifier(): ZoteroNotifier | undefined {
+  return (Zotero as unknown as { Notifier?: ZoteroNotifier }).Notifier;
+}
+
 export function startAnnotationAskWatch(): void {
   if (notifierId) return;
 
   try {
-    const notifier = (
-      Zotero as unknown as {
-        Notifier?: {
-          registerObserver?: (
-            observer: {
-              notify: (
-                event: string,
-                type: string,
-                ids: unknown[],
-                extraData: Record<string, unknown>,
-              ) => void;
-            },
-            types: string[],
-            id?: string,
-          ) => string;
-          unregisterObserver?: (id: string) => void;
-        };
-      }
-    ).Notifier;
+    const notifier = getZoteroNotifier();
 
     if (notifier?.registerObserver) {
       notifierId = notifier.registerObserver(
         {
-          notify(
-            event: string,
-            type: string,
-            ids: unknown[],
-            _extraData: Record<string, unknown>,
-          ) {
+          notify(event, type, ids) {
             handleItemNotification(
               event,
               type,
@@ -279,6 +327,20 @@ export function startAnnotationAskWatch(): void {
         ["item"],
         "annotationAskWatch",
       );
+      tabNotifierId = notifier.registerObserver(
+        {
+          notify(event, type, ids, extraData) {
+            handleTabNotification(
+              event,
+              type,
+              ids as Array<string | number>,
+              extraData,
+            );
+          },
+        },
+        ["tab"],
+        "annotationAskTabWatch",
+      );
       appLogger.info("Annotation ask: started");
     }
   } catch (err) {
@@ -287,20 +349,19 @@ export function startAnnotationAskWatch(): void {
 }
 
 export function stopAnnotationAskWatch(): void {
-  if (notifierId) {
+  if (notifierId || tabNotifierId) {
     try {
-      const notifier = (
-        Zotero as unknown as {
-          Notifier?: { unregisterObserver?: (id: string) => void };
-        }
-      ).Notifier;
-      notifier?.unregisterObserver?.(notifierId);
+      const notifier = getZoteroNotifier();
+      if (notifierId) notifier?.unregisterObserver?.(notifierId);
+      if (tabNotifierId) notifier?.unregisterObserver?.(tabNotifierId);
     } catch {}
     notifierId = null;
+    tabNotifierId = null;
   }
   for (const timer of debounceTimers.values()) clearTimeout(timer);
   debounceTimers.clear();
   inFlight.clear();
+  tabAttachmentIds.clear();
   queue = Promise.resolve();
 }
 
@@ -322,12 +383,22 @@ export function handleAnnotationAskNotificationForTests(
   handleItemNotification(event, type, ids, activeRunner);
 }
 
+export function handleAnnotationAskTabNotificationForTests(
+  event: string,
+  ids: Array<string | number>,
+  extraData: Record<string, unknown> = {},
+): void {
+  handleTabNotification(event, "tab", ids, extraData);
+}
+
 export function resetAnnotationAskWatchForTests(): void {
   notifierId = null;
+  tabNotifierId = null;
   activeRunner = runAnnotationAskTurn;
   debounceMsOverride = null;
   for (const timer of debounceTimers.values()) clearTimeout(timer);
   debounceTimers.clear();
   inFlight.clear();
+  tabAttachmentIds.clear();
   queue = Promise.resolve();
 }
