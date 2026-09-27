@@ -1,12 +1,29 @@
 import { appLogger } from "../../core/logging";
 import { isClaudeCodeModeEnabled } from "../../claudeCode/prefs";
 import { resolvePaperContextRefFromAttachment } from "../../services/paperContent/paperAttribution";
-import { parseAsk, renderComment, type AskState } from "./commentProtocol";
+import {
+  parseAsk,
+  reconcileFinalComment,
+  renderComment,
+  type FinalAskState,
+} from "./commentProtocol";
 import { isAnnotationAskEnabled } from "./prefs";
 import {
   runAnnotationAskTurn,
   type AnnotationAskTurnRunner,
 } from "./turnRunner";
+
+// Zotero's PDF reader autosaves the annotation comment on every keystroke, so
+// a "modify" notification can carry a half-typed "@claude ...". Coalescing
+// notifications through a per-annotation timer (mirrors mineru's
+// DEBOUNCE_MS in ../mineruAutoWatch.ts) means only the comment as it stands
+// once typing pauses is ever read as a question.
+const DEBOUNCE_MS = 3000;
+let debounceMsOverride: number | null = null;
+
+function getDebounceMs(): number {
+  return debounceMsOverride ?? DEBOUNCE_MS;
+}
 
 type MinimalAnnotation = {
   id: number;
@@ -32,6 +49,7 @@ function isFeatureActive(): boolean {
 let notifierId: string | null = null;
 let activeRunner: AnnotationAskTurnRunner = runAnnotationAskTurn;
 const inFlight = new Set<number>();
+const debounceTimers = new Map<number, ReturnType<typeof setTimeout>>();
 let queue: Promise<void> = Promise.resolve();
 
 function normalizeItemId(id: string | number): number | null {
@@ -49,16 +67,66 @@ function isEligibleAnnotation(annotation: MinimalAnnotation): boolean {
   return annotation.annotationType === "note";
 }
 
-async function writeAskState(
+function getPdfAttachmentParent(
+  annotation: MinimalAnnotation,
+): MinimalAttachment | null {
+  const pdfAttachment = annotation.parentID
+    ? (Zotero.Items.get(
+        annotation.parentID,
+      ) as unknown as MinimalAttachment | null)
+    : null;
+  if (
+    !pdfAttachment?.isAttachment?.() ||
+    pdfAttachment.attachmentContentType !== "application/pdf"
+  ) {
+    return null;
+  }
+  return pdfAttachment;
+}
+
+/** Structural eligibility only — independent of what is currently typed. */
+function getCandidateAnnotation(annotationId: number): {
+  annotation: MinimalAnnotation;
+  pdfAttachment: MinimalAttachment;
+} | null {
+  const annotation = Zotero.Items.get(
+    annotationId,
+  ) as unknown as MinimalAnnotation | null;
+  if (!annotation?.isAnnotation?.() || !isEligibleAnnotation(annotation)) {
+    return null;
+  }
+  const pdfAttachment = getPdfAttachmentParent(annotation);
+  if (!pdfAttachment) return null;
+  return { annotation, pdfAttachment };
+}
+
+async function writePendingState(
   annotationId: number,
   original: string,
-  state: AskState,
 ): Promise<void> {
   const annotation = Zotero.Items.get(
     annotationId,
   ) as unknown as MinimalAnnotation | null;
   if (!annotation) return;
-  annotation.annotationComment = renderComment(original, state);
+  annotation.annotationComment = renderComment(original, { kind: "pending" });
+  await annotation.saveTx();
+}
+
+async function writeFinalState(
+  annotationId: number,
+  original: string,
+  finalState: FinalAskState,
+): Promise<void> {
+  const annotation = Zotero.Items.get(
+    annotationId,
+  ) as unknown as MinimalAnnotation | null;
+  if (!annotation) return;
+  const currentComment = String(annotation.annotationComment || "");
+  annotation.annotationComment = reconcileFinalComment({
+    original,
+    currentComment,
+    finalState,
+  });
   await annotation.saveTx();
 }
 
@@ -78,14 +146,14 @@ async function processAsk(
     : null;
 
   if (!annotation || !paperContext) {
-    await writeAskState(annotationId, original, {
+    await writeFinalState(annotationId, original, {
       kind: "failed",
       reason: "paper context unavailable",
     });
     return;
   }
 
-  await writeAskState(annotationId, original, { kind: "pending" });
+  await writePendingState(annotationId, original);
 
   try {
     const text = await runner({
@@ -96,12 +164,12 @@ async function processAsk(
       paperContext,
       annotationItemId: annotationId,
     });
-    await writeAskState(annotationId, original, { kind: "answered", text });
+    await writeFinalState(annotationId, original, { kind: "answered", text });
   } catch (err) {
     const reason = truncateFailureReason(
       err instanceof Error ? err.message : String(err),
     );
-    await writeAskState(annotationId, original, { kind: "failed", reason });
+    await writeFinalState(annotationId, original, { kind: "failed", reason });
   }
 }
 
@@ -117,32 +185,17 @@ async function considerAnnotation(
 ): Promise<void> {
   if (inFlight.has(annotationId)) return;
 
-  const annotation = Zotero.Items.get(
-    annotationId,
-  ) as unknown as MinimalAnnotation | null;
-  if (!annotation?.isAnnotation?.()) return;
-  if (!isEligibleAnnotation(annotation)) return;
+  const candidate = getCandidateAnnotation(annotationId);
+  if (!candidate) return;
 
-  const pdfAttachment = annotation.parentID
-    ? (Zotero.Items.get(
-        annotation.parentID,
-      ) as unknown as MinimalAttachment | null)
-    : null;
-  if (
-    !pdfAttachment?.isAttachment?.() ||
-    pdfAttachment.attachmentContentType !== "application/pdf"
-  ) {
-    return;
-  }
-
-  const parsed = parseAsk(String(annotation.annotationComment || ""));
+  const parsed = parseAsk(String(candidate.annotation.annotationComment || ""));
   if (!parsed) return;
 
   inFlight.add(annotationId);
   await scheduleAsk(() =>
     processAsk(
       annotationId,
-      pdfAttachment.id,
+      candidate.pdfAttachment.id,
       parsed.question,
       parsed.original,
       runner,
@@ -152,12 +205,33 @@ async function considerAnnotation(
   );
 }
 
-async function handleItemNotification(
+function scheduleAnnotationCheck(
+  annotationId: number,
+  runner: AnnotationAskTurnRunner,
+): void {
+  // Already mid-turn: our own pending/final writes will each re-fire this
+  // notification, and re-arming the timer here would only delay the
+  // re-check that the marker already makes a no-op.
+  if (inFlight.has(annotationId)) return;
+
+  const existing = debounceTimers.get(annotationId);
+  if (existing) clearTimeout(existing);
+
+  const timer = setTimeout(() => {
+    debounceTimers.delete(annotationId);
+    void considerAnnotation(annotationId, runner).catch((err) => {
+      appLogger.warn("Annotation ask: failed to process annotation", err);
+    });
+  }, getDebounceMs());
+  debounceTimers.set(annotationId, timer);
+}
+
+function handleItemNotification(
   event: string,
   type: string,
   ids: Array<string | number>,
   runner: AnnotationAskTurnRunner,
-): Promise<void> {
+): void {
   if (type !== "item") return;
   if (event !== "add" && event !== "modify") return;
   // Read the gate fresh on every notification so toggling the preference
@@ -167,11 +241,8 @@ async function handleItemNotification(
   for (const rawId of ids) {
     const id = normalizeItemId(rawId);
     if (id === null) continue;
-    try {
-      await considerAnnotation(id, runner);
-    } catch (err) {
-      appLogger.warn("Annotation ask: failed to process annotation", err);
-    }
+    if (!getCandidateAnnotation(id)) continue;
+    scheduleAnnotationCheck(id, runner);
   }
 }
 
@@ -208,7 +279,7 @@ export function startAnnotationAskWatch(): void {
             ids: unknown[],
             _extraData: Record<string, unknown>,
           ) {
-            void handleItemNotification(
+            handleItemNotification(
               event,
               type,
               ids as Array<string | number>,
@@ -240,6 +311,8 @@ export function stopAnnotationAskWatch(): void {
     }
     notifierId = null;
   }
+  for (const timer of debounceTimers.values()) clearTimeout(timer);
+  debounceTimers.clear();
   inFlight.clear();
   queue = Promise.resolve();
 }
@@ -250,17 +323,24 @@ export function setAnnotationAskTurnRunnerForTests(
   activeRunner = runner;
 }
 
-export async function handleAnnotationAskNotificationForTests(
+export function setAnnotationAskDebounceMsForTests(ms: number | null): void {
+  debounceMsOverride = ms;
+}
+
+export function handleAnnotationAskNotificationForTests(
   event: string,
   type: string,
   ids: Array<string | number>,
-): Promise<void> {
-  await handleItemNotification(event, type, ids, activeRunner);
+): void {
+  handleItemNotification(event, type, ids, activeRunner);
 }
 
 export function resetAnnotationAskWatchForTests(): void {
   notifierId = null;
   activeRunner = runAnnotationAskTurn;
+  debounceMsOverride = null;
+  for (const timer of debounceTimers.values()) clearTimeout(timer);
+  debounceTimers.clear();
   inFlight.clear();
   queue = Promise.resolve();
 }

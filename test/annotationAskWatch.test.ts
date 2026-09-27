@@ -2,9 +2,21 @@ import { assert } from "chai";
 import {
   handleAnnotationAskNotificationForTests,
   resetAnnotationAskWatchForTests,
+  setAnnotationAskDebounceMsForTests,
   setAnnotationAskTurnRunnerForTests,
 } from "../src/modules/annotationAsk/watch";
 import type { AnnotationAskTurnInput } from "../src/modules/annotationAsk/turnRunner";
+
+const TEST_DEBOUNCE_MS = 20;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Long enough for the debounce timer to fire and the queued turn to settle. */
+async function waitPastDebounce(): Promise<void> {
+  await sleep(TEST_DEBOUNCE_MS + 40);
+}
 
 type MockItem = {
   id: number;
@@ -94,6 +106,10 @@ function setupZotero(
 }
 
 describe("annotationAsk/watch", function () {
+  beforeEach(function () {
+    setAnnotationAskDebounceMsForTests(TEST_DEBOUNCE_MS);
+  });
+
   afterEach(function () {
     resetAnnotationAskWatchForTests();
     delete (globalThis as unknown as { Zotero?: unknown }).Zotero;
@@ -116,9 +132,8 @@ describe("annotationAsk/watch", function () {
       return "요약입니다.";
     });
 
-    await handleAnnotationAskNotificationForTests("modify", "item", [
-      annotation.id,
-    ]);
+    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
+    await waitPastDebounce();
 
     assert.equal(
       annotation.annotationComment,
@@ -130,9 +145,8 @@ describe("annotationAsk/watch", function () {
     assert.equal(calls[0].title, "Attention Is All You Need");
 
     calls.length = 0;
-    await handleAnnotationAskNotificationForTests("modify", "item", [
-      annotation.id,
-    ]);
+    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
+    await waitPastDebounce();
     assert.lengthOf(calls, 0);
     assert.equal(
       annotation.annotationComment,
@@ -155,9 +169,8 @@ describe("annotationAsk/watch", function () {
       throw new Error("bridge unreachable");
     });
 
-    await handleAnnotationAskNotificationForTests("modify", "item", [
-      annotation.id,
-    ]);
+    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
+    await waitPastDebounce();
 
     assert.equal(
       annotation.annotationComment,
@@ -182,9 +195,8 @@ describe("annotationAsk/watch", function () {
       return "unused";
     });
 
-    await handleAnnotationAskNotificationForTests("modify", "item", [
-      annotation.id,
-    ]);
+    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
+    await waitPastDebounce();
 
     assert.isFalse(called);
     assert.equal(annotation.annotationComment, "@claude 요약해줘");
@@ -207,9 +219,8 @@ describe("annotationAsk/watch", function () {
       return "unused";
     });
 
-    await handleAnnotationAskNotificationForTests("modify", "item", [
-      annotation.id,
-    ]);
+    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
+    await waitPastDebounce();
 
     assert.isFalse(called);
     assert.equal(annotation.annotationComment, "@claude 요약해줘");
@@ -232,9 +243,8 @@ describe("annotationAsk/watch", function () {
       return "unused";
     });
 
-    await handleAnnotationAskNotificationForTests("add", "item", [
-      annotation.id,
-    ]);
+    handleAnnotationAskNotificationForTests("add", "item", [annotation.id]);
+    await waitPastDebounce();
 
     assert.isFalse(called);
     assert.equal(annotation.annotationComment, "just a note");
@@ -258,9 +268,8 @@ describe("annotationAsk/watch", function () {
       return "unused";
     });
 
-    await handleAnnotationAskNotificationForTests("add", "item", [
-      annotation.id,
-    ]);
+    handleAnnotationAskNotificationForTests("add", "item", [annotation.id]);
+    await waitPastDebounce();
 
     assert.isFalse(called);
   });
@@ -280,13 +289,76 @@ describe("annotationAsk/watch", function () {
 
     setAnnotationAskTurnRunnerForTests(async () => "노트 답변");
 
-    await handleAnnotationAskNotificationForTests("modify", "item", [
-      annotation.id,
-    ]);
+    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
+    await waitPastDebounce();
 
     assert.equal(
       annotation.annotationComment,
       "@claude 요약해줘\n\nClaude:\n노트 답변",
+    );
+  });
+
+  it("debounces rapid modifies while the user is still typing, answering only the settled question", async function () {
+    const parent = createParent();
+    const pdf = createPdf();
+    const annotation = createAnnotation(303, 302, "@claude 이");
+    const items = new Map<number, MockItem>([
+      [parent.id, parent],
+      [pdf.id, pdf],
+      [annotation.id, annotation],
+    ]);
+    setupZotero(items);
+
+    const calls: AnnotationAskTurnInput[] = [];
+    setAnnotationAskTurnRunnerForTests(async (input) => {
+      calls.push(input);
+      return "이건 셀프 어텐션입니다.";
+    });
+
+    // First keystroke-driven autosave: a half-typed question.
+    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
+    await sleep(TEST_DEBOUNCE_MS / 2);
+
+    // Still well within the debounce window: this restarts the timer instead
+    // of stacking a second turn, and only the settled text is ever read.
+    annotation.annotationComment = "@claude 이게 뭐야?";
+    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
+
+    await waitPastDebounce();
+
+    assert.lengthOf(calls, 1);
+    assert.equal(calls[0].question, "이게 뭐야?");
+    assert.equal(
+      annotation.annotationComment,
+      "@claude 이게 뭐야?\n\nClaude:\n이건 셀프 어텐션입니다.",
+    );
+  });
+
+  it("preserves an edit made while the turn was in flight instead of clobbering it", async function () {
+    const parent = createParent();
+    const pdf = createPdf();
+    const annotation = createAnnotation();
+    const items = new Map<number, MockItem>([
+      [parent.id, parent],
+      [pdf.id, pdf],
+      [annotation.id, annotation],
+    ]);
+    setupZotero(items);
+
+    setAnnotationAskTurnRunnerForTests(async () => {
+      // Simulate the user typing more into the comment while the turn is
+      // still running — Zotero's own autosave, arriving mid-flight.
+      annotation.annotationComment =
+        "@claude 요약해줘 (급함)\n\nClaude: 답변 작성 중...";
+      return "요약입니다.";
+    });
+
+    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
+    await waitPastDebounce();
+
+    assert.equal(
+      annotation.annotationComment,
+      "@claude 요약해줘 (급함)\n\nClaude:\n요약입니다.",
     );
   });
 });
