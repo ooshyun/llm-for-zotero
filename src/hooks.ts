@@ -323,6 +323,14 @@ function scheduleMineruAutoWatchRegistration(): void {
   });
 }
 
+function scheduleAnnotationAskWatchRegistration(): void {
+  runDeferredStartupTask("annotation ask watch", async () => {
+    const { startAnnotationAskWatch } =
+      await import("./modules/annotationAsk/watch");
+    startAnnotationAskWatch();
+  });
+}
+
 function scheduleModelCapabilityRefresh(): void {
   if (__env__ === "test") return;
   runDeferredStartupTask("model capability registry", async () => {
@@ -358,6 +366,7 @@ function scheduleDeferredStartupWork(
   scheduleAttachmentMaintenance();
   scheduleWebChatRelayRegistration();
   scheduleMineruAutoWatchRegistration();
+  scheduleAnnotationAskWatchRegistration();
   scheduleModelCapabilityRefresh();
 }
 
@@ -578,6 +587,12 @@ async function onShutdown(): Promise<void> {
   try {
     const { stopAutoWatch } = require("./modules/mineruAutoWatch");
     stopAutoWatch();
+  } catch {
+    /* ignore if module not loaded */
+  }
+  try {
+    const { stopAnnotationAskWatch } = require("./modules/annotationAsk/watch");
+    stopAnnotationAskWatch();
   } catch {
     /* ignore if module not loaded */
   }
