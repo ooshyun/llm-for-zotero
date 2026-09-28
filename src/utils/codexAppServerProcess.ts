@@ -1856,7 +1856,7 @@ function getNonEmptyEnvValue(
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function getRuntimeEnvValue(key: string): string | undefined {
+export function getRuntimeEnvValue(key: string): string | undefined {
   const processValue = (globalThis as any).process?.env?.[key];
   if (typeof processValue === "string" && processValue.trim()) {
     return processValue.trim();
@@ -1899,7 +1899,7 @@ export function mergeCodexNoProxyValues(
   return entries.join(",");
 }
 
-function buildCodexLaunchEnvironment(
+export function buildCodexLaunchEnvironment(
   invocationEnvironment?: Record<string, string>,
 ): Record<string, string> {
   const runtimeEnv = getCodexRuntimeEnv();
@@ -2020,24 +2020,26 @@ async function listChildren(path: string): Promise<string[]> {
   }
 }
 
-function buildPrefixCodexCandidates(params: {
+function buildPrefixBinaryCandidates(params: {
+  binaryName: string;
   prefix: string;
   platform: "windows" | "macos" | "linux";
   separator: "/" | "\\";
 }): string[] {
+  const { binaryName } = params;
   const prefix = params.prefix.trim();
   if (!prefix) return [];
   if (params.platform === "windows") {
     return [
-      joinRuntimePath(params.separator, prefix, "codex.cmd"),
-      joinRuntimePath(params.separator, prefix, "codex.exe"),
-      joinRuntimePath(params.separator, prefix, "bin", "codex.cmd"),
-      joinRuntimePath(params.separator, prefix, "bin", "codex.exe"),
+      joinRuntimePath(params.separator, prefix, `${binaryName}.cmd`),
+      joinRuntimePath(params.separator, prefix, `${binaryName}.exe`),
+      joinRuntimePath(params.separator, prefix, "bin", `${binaryName}.cmd`),
+      joinRuntimePath(params.separator, prefix, "bin", `${binaryName}.exe`),
     ];
   }
   return [
-    joinRuntimePath(params.separator, prefix, "bin", "codex"),
-    joinRuntimePath(params.separator, prefix, "codex"),
+    joinRuntimePath(params.separator, prefix, "bin", binaryName),
+    joinRuntimePath(params.separator, prefix, binaryName),
   ];
 }
 
@@ -2153,6 +2155,24 @@ async function buildPosixCodexInvocation(
   binary: string,
   info: ReturnType<typeof getRuntimePlatformInfo>,
 ): Promise<CodexLaunchInvocation> {
+  const path = await buildPosixLaunchPath(binary, "codex", info);
+  return {
+    command: binary,
+    args: ["app-server"],
+    ...(path ? { environment: { PATH: path } } : {}),
+  };
+}
+
+/**
+ * The PATH a child launched from a GUI Zotero needs to find the tools that
+ * sit beside its binary (node, npm shims, Homebrew), since launchd's inherited
+ * PATH has none of them.
+ */
+export async function buildPosixLaunchPath(
+  binary: string,
+  binaryName: string,
+  info: ReturnType<typeof getRuntimePlatformInfo>,
+): Promise<string> {
   const env = getCodexRuntimeEnv();
   const homeDir = getNonEmptyEnvValue(env, "HOME") || "";
   const prefixCandidates = uniquePaths(
@@ -2163,7 +2183,8 @@ async function buildPosixCodexInvocation(
     ]
       .filter((entry): entry is string => Boolean(entry))
       .flatMap((prefix) =>
-        buildPrefixCodexCandidates({
+        buildPrefixBinaryCandidates({
+          binaryName,
           prefix,
           platform: info.platform,
           separator: "/",
@@ -2171,7 +2192,8 @@ async function buildPosixCodexInvocation(
       ),
   );
   const nvmCandidates = homeDir
-    ? await listNvmCodexCandidates({
+    ? await listNvmBinaryCandidates({
+        binaryName,
         homeDir,
         nvmDir: getNonEmptyEnvValue(env, "NVM_DIR"),
         separator: "/",
@@ -2192,14 +2214,7 @@ async function buildPosixCodexInvocation(
     "/bin",
   ]);
   const inheritedPath = getNonEmptyEnvValue(env, "PATH") || "";
-  const path = uniquePaths([...pathEntries, ...inheritedPath.split(":")]).join(
-    ":",
-  );
-  return {
-    command: binary,
-    args: ["app-server"],
-    ...(path ? { environment: { PATH: path } } : {}),
-  };
+  return uniquePaths([...pathEntries, ...inheritedPath.split(":")]).join(":");
 }
 
 function getWindowsNpmCodexJsPath(directory: string): string {
@@ -2329,7 +2344,8 @@ function buildWindowsCodexCandidates(
   return uniquePaths(candidates);
 }
 
-export async function listNvmCodexCandidates(params: {
+export async function listNvmBinaryCandidates(params: {
+  binaryName: string;
   homeDir: string;
   nvmDir?: string;
   separator: "/";
@@ -2349,7 +2365,7 @@ export async function listNvmCodexCandidates(params: {
     )
     .sort((a, b) => b.localeCompare(a))
     .map((versionDir) =>
-      joinRuntimePath(params.separator, versionDir, "bin", "codex"),
+      joinRuntimePath(params.separator, versionDir, "bin", params.binaryName),
     );
 }
 
@@ -2425,14 +2441,17 @@ async function resolveWindowsCodexShimPath(path: string): Promise<string> {
   return path;
 }
 
-async function resolveCodexBinaryFromShellPathLookup(
+async function resolveBinaryFromShellPathLookup(
+  binaryName: string,
   info: ReturnType<typeof getRuntimePlatformInfo>,
   Subprocess: any,
 ): Promise<string | undefined> {
   if (!Subprocess?.call) return undefined;
   try {
     const lookupCmd =
-      info.platform === "windows" ? "where codex" : "which codex";
+      info.platform === "windows"
+        ? `where ${binaryName}`
+        : `which ${binaryName}`;
     const proc = await Subprocess.call({
       command: info.shellPath,
       arguments: [info.shellFlag, lookupCmd],
@@ -2454,7 +2473,8 @@ async function resolveWindowsNativeCodexBinary(params: {
   Subprocess: any;
 }): Promise<string | undefined> {
   const info = getRuntimePlatformInfo();
-  const lookupResult = await resolveCodexBinaryFromShellPathLookup(
+  const lookupResult = await resolveBinaryFromShellPathLookup(
+    "codex",
     info,
     params.Subprocess,
   );
@@ -2470,7 +2490,8 @@ async function resolveWindowsNativeCodexBinary(params: {
     ]
       .filter((entry): entry is string => Boolean(entry))
       .flatMap((prefix) =>
-        buildPrefixCodexCandidates({
+        buildPrefixBinaryCandidates({
+          binaryName: "codex",
           prefix,
           platform: "windows",
           separator: "\\",
@@ -2530,16 +2551,33 @@ export async function resolveCodexBinary(
       Subprocess,
     });
     if (nativeCodex) return nativeCodex;
-  } else {
-    const found = await resolveCodexBinaryFromShellPathLookup(info, Subprocess);
-    if (found) return found;
-  }
-
-  if (info.platform === "windows") {
     throw createCodexBinaryNotFoundError(info.platform);
   }
 
   // 3. Deterministic common install paths
+  const found = await findPosixBinary("codex", info, env, Subprocess);
+  if (found) return found;
+  throw createCodexBinaryNotFoundError(info.platform);
+}
+
+/**
+ * A Zotero launched from the macOS Dock inherits launchd's minimal PATH, so a
+ * shell `which` misses Homebrew, nvm, Volta and npm-global installs; the
+ * deterministic install locations below cover them.
+ */
+async function findPosixBinary(
+  binaryName: string,
+  info: ReturnType<typeof getRuntimePlatformInfo>,
+  env: Record<string, string | undefined>,
+  Subprocess: any,
+): Promise<string | undefined> {
+  const found = await resolveBinaryFromShellPathLookup(
+    binaryName,
+    info,
+    Subprocess,
+  );
+  if (found) return found;
+
   const homeDir =
     getNonEmptyEnvValue(env, "HOME") ||
     getNonEmptyEnvValue(env, "USERPROFILE") ||
@@ -2552,43 +2590,36 @@ export async function resolveCodexBinary(
     ]
       .filter((entry): entry is string => Boolean(entry))
       .flatMap((prefix) =>
-        buildPrefixCodexCandidates({
+        buildPrefixBinaryCandidates({
+          binaryName,
           prefix,
           platform: info.platform,
           separator: info.pathSeparator,
         }),
       ),
   );
+  const homeBinDirs = [
+    [".cargo", "bin"],
+    [".npm-global", "bin"],
+    [".local", "bin"],
+    [".volta", "bin"],
+    [".asdf", "shims"],
+  ];
   const commonCandidates = uniquePaths([
-    homeDir
-      ? joinRuntimePath(info.pathSeparator, homeDir, ".cargo", "bin", "codex")
-      : "",
-    homeDir
-      ? joinRuntimePath(
-          info.pathSeparator,
-          homeDir,
-          ".npm-global",
-          "bin",
-          "codex",
+    ...(homeDir
+      ? homeBinDirs.map((dir) =>
+          joinRuntimePath(info.pathSeparator, homeDir, ...dir, binaryName),
         )
-      : "",
-    homeDir
-      ? joinRuntimePath(info.pathSeparator, homeDir, ".local", "bin", "codex")
-      : "",
-    homeDir
-      ? joinRuntimePath(info.pathSeparator, homeDir, ".volta", "bin", "codex")
-      : "",
-    homeDir
-      ? joinRuntimePath(info.pathSeparator, homeDir, ".asdf", "shims", "codex")
-      : "",
-    ...(info.platform === "macos" ? ["/opt/homebrew/bin/codex"] : []),
-    "/usr/local/bin/codex",
-    "/usr/bin/codex",
+      : []),
+    ...(info.platform === "macos" ? [`/opt/homebrew/bin/${binaryName}`] : []),
+    `/usr/local/bin/${binaryName}`,
+    `/usr/bin/${binaryName}`,
   ]);
 
   const nvmCandidates = !homeDir
     ? []
-    : await listNvmCodexCandidates({
+    : await listNvmBinaryCandidates({
+        binaryName,
         homeDir,
         nvmDir: getNonEmptyEnvValue(env, "NVM_DIR"),
         separator: "/",
@@ -2601,8 +2632,24 @@ export async function resolveCodexBinary(
   ]) {
     if (await pathExists(candidate)) return candidate;
   }
+  return undefined;
+}
 
-  throw createCodexBinaryNotFoundError(info.platform);
+/** Resolves a CLI such as `node` the same way the codex binary is resolved. */
+export async function resolveLocalBinary(
+  binaryName: string,
+): Promise<string | undefined> {
+  const info = getRuntimePlatformInfo();
+  let Subprocess: any;
+  try {
+    Subprocess = await CodexAppServerProcess.loadSubprocessModule();
+  } catch {
+    Subprocess = null;
+  }
+  if (info.platform === "windows") {
+    return resolveBinaryFromShellPathLookup(binaryName, info, Subprocess);
+  }
+  return findPosixBinary(binaryName, info, getCodexRuntimeEnv(), Subprocess);
 }
 
 // Per-auth-mode singleton processes

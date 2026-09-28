@@ -6,7 +6,7 @@ import {
   extractCodexAppServerTurnId,
   getOrCreateCodexAppServerProcess,
   isCodexAppServerInjectItemsUnsupportedError,
-  listNvmCodexCandidates,
+  listNvmBinaryCandidates,
   mergeCodexNoProxyValues,
   resolveCodexAppServerBinaryPath,
   resolveCodexBinary,
@@ -3026,7 +3026,8 @@ describe("codexAppServerProcess", function () {
             : [],
       },
       async () => {
-        const candidates = await listNvmCodexCandidates({
+        const candidates = await listNvmBinaryCandidates({
+          binaryName: "codex",
           homeDir: "/Users/alice",
           nvmDir: "/Users/alice/.nvm",
           separator: "/",
