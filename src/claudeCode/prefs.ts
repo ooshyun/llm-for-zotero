@@ -170,6 +170,24 @@ export function setClaudeBridgeUrl(url: string): void {
   setPref("agentBackendBridgeUrl", url.trim());
 }
 
+export function getClaudeBridgeAdapterDir(): string {
+  return getStringPref("claudeBridgeAdapterDir").trim();
+}
+
+export function setClaudeBridgeAdapterDir(dir: string): void {
+  setPref("claudeBridgeAdapterDir", dir.trim());
+}
+
+export function isClaudeBridgeAutoStartEnabled(): boolean {
+  return (
+    getZoteroPrefs()?.get?.(prefKey("claudeBridgeAutoStart"), true) === true
+  );
+}
+
+export function setClaudeBridgeAutoStartEnabled(enabled: boolean): void {
+  setPref("claudeBridgeAutoStart", Boolean(enabled));
+}
+
 export function getClaudeCustomInstructionPref(): string {
   return getStringPref("systemPrompt").trim();
 }

@@ -24,6 +24,8 @@ pref("enableAgentMode", false);
 pref("contextCacheTelemetry", "");
 pref("enableClaudeCodeMode", false);
 pref("agentBackendBridgeUrl", "http://127.0.0.1:19787");
+pref("claudeBridgeAdapterDir", "");
+pref("claudeBridgeAutoStart", false);
 pref("agentClaudeConfigSource", "default");
 pref("agentPermissionMode", "safe");
 pref("claudeCodePermissionMode", "default");
