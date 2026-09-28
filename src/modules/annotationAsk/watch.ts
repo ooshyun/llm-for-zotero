@@ -49,7 +49,10 @@ let tabNotifierId: string | null = null;
 let activeRunner: AnnotationAskTurnRunner = runAnnotationAskTurn;
 const inFlight = new Set<number>();
 const debounceTimers = new Map<number, ReturnType<typeof setTimeout>>();
-let queue: Promise<void> = Promise.resolve();
+// Keyed by PDF attachment id, which is 1:1 with a paper session: turns on one
+// paper resume the same Claude session and must not overlap, while different
+// papers answer concurrently.
+const paperQueues = new Map<number, Promise<void>>();
 
 // Zotero's "close" tab notification carries no per-tab data (see
 // handleTabNotification), so the attachment a closing tab belonged to must
@@ -176,9 +179,20 @@ async function processAsk(
   }
 }
 
-function scheduleAsk(task: () => Promise<void>): Promise<void> {
-  const started = queue.then(task);
-  queue = started.catch(() => undefined);
+function scheduleAsk(
+  pdfAttachmentId: number,
+  task: () => Promise<void>,
+): Promise<void> {
+  const previous = paperQueues.get(pdfAttachmentId) ?? Promise.resolve();
+  const started = previous.then(task);
+  const tail: Promise<void> = started
+    .catch(() => undefined)
+    .then(() => {
+      if (paperQueues.get(pdfAttachmentId) === tail) {
+        paperQueues.delete(pdfAttachmentId);
+      }
+    });
+  paperQueues.set(pdfAttachmentId, tail);
   return started;
 }
 
@@ -195,7 +209,7 @@ async function considerAnnotation(
   if (!parsed) return;
 
   inFlight.add(annotationId);
-  await scheduleAsk(() =>
+  await scheduleAsk(candidate.pdfAttachment.id, () =>
     processAsk(
       annotationId,
       candidate.pdfAttachment.id,
@@ -362,7 +376,7 @@ export function stopAnnotationAskWatch(): void {
   debounceTimers.clear();
   inFlight.clear();
   tabAttachmentIds.clear();
-  queue = Promise.resolve();
+  paperQueues.clear();
 }
 
 export function setAnnotationAskTurnRunnerForTests(
@@ -400,5 +414,5 @@ export function resetAnnotationAskWatchForTests(): void {
   debounceTimers.clear();
   inFlight.clear();
   tabAttachmentIds.clear();
-  queue = Promise.resolve();
+  paperQueues.clear();
 }

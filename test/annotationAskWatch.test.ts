@@ -22,6 +22,36 @@ async function waitPastDebounce(): Promise<void> {
   await sleep(TEST_DEBOUNCE_MS + 40);
 }
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+function createBlockingRunner(): {
+  started: string[];
+  release: (question: string, answer: string) => void;
+  runner: (input: AnnotationAskTurnInput) => Promise<string>;
+} {
+  const started: string[] = [];
+  const pending = new Map<string, (answer: string) => void>();
+  return {
+    started,
+    release: (question, answer) => pending.get(question)?.(answer),
+    runner: (input) => {
+      started.push(input.question);
+      const deferred = createDeferred<string>();
+      pending.set(input.question, deferred.resolve);
+      return deferred.promise;
+    },
+  };
+}
+
 type MockItem = {
   id: number;
   libraryID: number;
@@ -457,5 +487,84 @@ describe("annotationAsk/watch", function () {
     await waitPastDebounce();
 
     assert.equal(observedKey, expectedKey);
+  });
+
+  it("answers annotations on different papers concurrently", async function () {
+    const parentA = createParent(301);
+    const pdfA = createPdf(302, 301);
+    const annotationA = createAnnotation(303, 302, "@claude 첫번째");
+    const parentB = createParent(401);
+    const pdfB = createPdf(402, 401);
+    const annotationB = createAnnotation(403, 402, "@claude 두번째");
+    const items = new Map<number, MockItem>(
+      [parentA, pdfA, annotationA, parentB, pdfB, annotationB].map((item) => [
+        item.id,
+        item,
+      ]),
+    );
+    setupZotero(items);
+
+    const blocking = createBlockingRunner();
+    setAnnotationAskTurnRunnerForTests(blocking.runner);
+
+    handleAnnotationAskNotificationForTests("modify", "item", [
+      annotationA.id,
+      annotationB.id,
+    ]);
+    await waitPastDebounce();
+
+    assert.deepEqual(blocking.started, ["첫번째", "두번째"]);
+
+    blocking.release("첫번째", "답변 A");
+    blocking.release("두번째", "답변 B");
+    await sleep(10);
+
+    assert.equal(
+      annotationA.annotationComment,
+      "@claude 첫번째\n\nClaude:\n답변 A",
+    );
+    assert.equal(
+      annotationB.annotationComment,
+      "@claude 두번째\n\nClaude:\n답변 B",
+    );
+  });
+
+  it("runs turns on the same paper one after another", async function () {
+    const parent = createParent();
+    const pdf = createPdf();
+    const annotationA = createAnnotation(303, 302, "@claude 첫번째");
+    const annotationB = createAnnotation(304, 302, "@claude 두번째");
+    const items = new Map<number, MockItem>(
+      [parent, pdf, annotationA, annotationB].map((item) => [item.id, item]),
+    );
+    setupZotero(items);
+
+    const blocking = createBlockingRunner();
+    setAnnotationAskTurnRunnerForTests(blocking.runner);
+
+    handleAnnotationAskNotificationForTests("modify", "item", [
+      annotationA.id,
+      annotationB.id,
+    ]);
+    await waitPastDebounce();
+
+    assert.deepEqual(blocking.started, ["첫번째"]);
+
+    blocking.release("첫번째", "답변 A");
+    await sleep(10);
+
+    assert.deepEqual(blocking.started, ["첫번째", "두번째"]);
+    assert.equal(
+      annotationA.annotationComment,
+      "@claude 첫번째\n\nClaude:\n답변 A",
+    );
+
+    blocking.release("두번째", "답변 B");
+    await sleep(10);
+
+    assert.equal(
+      annotationB.annotationComment,
+      "@claude 두번째\n\nClaude:\n답변 B",
+    );
   });
 });
