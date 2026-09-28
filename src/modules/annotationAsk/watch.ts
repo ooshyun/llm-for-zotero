@@ -153,6 +153,7 @@ async function processAsk(
   pdfAttachmentId: number,
   question: string,
   original: string,
+  priorThread: string | undefined,
   runner: AnnotationAskTurnRunner,
 ): Promise<void> {
   const annotation = Zotero.Items.get(
@@ -179,6 +180,7 @@ async function processAsk(
       pageLabel: annotation.annotationPageLabel || undefined,
       highlight: annotation.annotationText || "",
       question,
+      priorThread,
       paperContext,
     });
     await writeFinalState(annotationId, original, { kind: "answered", text });
@@ -249,6 +251,7 @@ async function considerAnnotation(
       candidate.pdfAttachment.id,
       parsed.question,
       parsed.original,
+      parsed.priorThread,
       runner,
     ).finally(() => {
       inFlight.delete(annotationId);

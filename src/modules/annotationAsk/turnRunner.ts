@@ -11,6 +11,7 @@ export type AnnotationAskTurnInput = {
   pageLabel?: string;
   highlight: string;
   question: string;
+  priorThread?: string;
   paperContext: PaperContextRef;
 };
 
@@ -60,6 +61,7 @@ export async function buildAnnotationAskRequest(
       highlight: input.highlight,
       question: input.question,
       pdfPath,
+      priorThread: input.priorThread,
     }),
     activeItemId: input.paperContext.itemId,
     libraryID,

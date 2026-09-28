@@ -86,7 +86,10 @@ describe("annotationAsk/commentProtocol", function () {
         "@claude 원래 질문\n\nClaude:\n답변입니다.\n\n@claude 다음 질문";
       const result = parseAsk(failedBlockDeleted);
       assert.equal(result?.question, "다음 질문");
-      assert.equal(result?.priorThread, "@claude 원래 질문\n\nClaude:\n답변입니다.");
+      assert.equal(
+        result?.priorThread,
+        "@claude 원래 질문\n\nClaude:\n답변입니다.",
+      );
     });
   });
 
