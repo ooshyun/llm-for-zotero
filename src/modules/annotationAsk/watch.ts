@@ -10,6 +10,11 @@ import {
 import { closePaperSession, openPaperSession } from "./paperSessions";
 import { isAnnotationAskEnabled } from "./prefs";
 import {
+  attachReaderCommentHooksForTab,
+  startReaderCommentHooks,
+  stopReaderCommentHooks,
+} from "./readerCommentHooks";
+import {
   runAnnotationAskTurn,
   type AnnotationAskTurnRunner,
 } from "./turnRunner";
@@ -338,6 +343,7 @@ function handleTabNotification(
       if (attachmentId === null) continue;
       tabAttachmentIds.set(tabId, attachmentId);
       openPaperSession(attachmentId);
+      void attachReaderCommentHooksForTab(tabId);
     }
     return;
   }
@@ -406,6 +412,10 @@ export function startAnnotationAskWatch(): void {
         ["tab"],
         "annotationAskTabWatch",
       );
+      startReaderCommentHooks({
+        isActive: isFeatureActive,
+        submit: armAnnotationAsk,
+      });
       appLogger.info("Annotation ask: started");
     }
   } catch (err) {
@@ -423,6 +433,7 @@ export function stopAnnotationAskWatch(): void {
     notifierId = null;
     tabNotifierId = null;
   }
+  stopReaderCommentHooks();
   for (const timer of recheckTimers.values()) clearTimeout(timer);
   recheckTimers.clear();
   submitted.clear();
