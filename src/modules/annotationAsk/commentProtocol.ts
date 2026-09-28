@@ -43,7 +43,7 @@ export function renderAskBlock(state: AskState): string {
     case "answered":
       return `\n\nClaude:\n${state.text}`;
     case "failed":
-      return `\n\nClaude: 실패 (${state.reason}). 이 블록을 지우면 다시 시도합니다.`;
+      return `\n\nClaude: 실패 (${state.reason}). 이 블록을 지우고 Enter를 누르면 다시 시도합니다.`;
   }
 }
 

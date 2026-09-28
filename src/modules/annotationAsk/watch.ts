@@ -14,14 +14,19 @@ import {
   type AnnotationAskTurnRunner,
 } from "./turnRunner";
 
-// Zotero's PDF reader autosaves the annotation comment on every keystroke, so
-// a "modify" notification can carry a half-typed "@claude ...".
-const DEBOUNCE_MS = 3000;
-let debounceMsOverride: number | null = null;
+// The reader saves a comment edit up to 1000 ms after the last keystroke, so
+// the saved comment can trail the one the user just submitted.
+const SUBMIT_RECHECK_MS = 1200;
+const SUBMIT_TTL_MS = 15_000;
+let submitTimingOverride: { recheckMs: number; ttlMs: number } | null = null;
 
-function getDebounceMs(): number {
-  return debounceMsOverride ?? DEBOUNCE_MS;
-}
+type Submission = {
+  armedAt: number;
+  /** The comment the reader will save, or null when the reader cannot tell. */
+  comment: string | null;
+};
+
+type AskSource = "added" | "submitted";
 
 type MinimalAnnotation = {
   id: number;
@@ -48,7 +53,8 @@ let notifierId: string | null = null;
 let tabNotifierId: string | null = null;
 let activeRunner: AnnotationAskTurnRunner = runAnnotationAskTurn;
 const inFlight = new Set<number>();
-const debounceTimers = new Map<number, ReturnType<typeof setTimeout>>();
+const submitted = new Map<number, Submission>();
+const recheckTimers = new Map<number, ReturnType<typeof setTimeout>>();
 // Keyed by PDF attachment id, which is 1:1 with a paper session: turns on one
 // paper resume the same Claude session and must not overlap, while different
 // papers answer concurrently.
@@ -196,18 +202,41 @@ function scheduleAsk(
   return started;
 }
 
+function disarm(annotationId: number): void {
+  submitted.delete(annotationId);
+  clearTimeout(recheckTimers.get(annotationId));
+  recheckTimers.delete(annotationId);
+}
+
+function liveSubmission(annotationId: number): Submission | null {
+  const submission = submitted.get(annotationId);
+  if (!submission) return null;
+  const ttlMs = submitTimingOverride?.ttlMs ?? SUBMIT_TTL_MS;
+  if (Date.now() - submission.armedAt <= ttlMs) return submission;
+  disarm(annotationId);
+  return null;
+}
+
 async function considerAnnotation(
   annotationId: number,
+  source: AskSource,
   runner: AnnotationAskTurnRunner,
 ): Promise<void> {
   if (inFlight.has(annotationId)) return;
 
+  const submission =
+    source === "submitted" ? liveSubmission(annotationId) : null;
+  if (source === "submitted" && !submission) return;
+
   const candidate = getCandidateAnnotation(annotationId);
   if (!candidate) return;
 
-  const parsed = parseAsk(String(candidate.annotation.annotationComment || ""));
+  const comment = String(candidate.annotation.annotationComment || "");
+  if (submission?.comment != null && comment !== submission.comment) return;
+  const parsed = parseAsk(comment);
   if (!parsed) return;
 
+  disarm(annotationId);
   inFlight.add(annotationId);
   await scheduleAsk(candidate.pdfAttachment.id, () =>
     processAsk(
@@ -222,22 +251,44 @@ async function considerAnnotation(
   );
 }
 
-function scheduleAnnotationCheck(
+function checkAnnotation(
   annotationId: number,
+  source: AskSource,
   runner: AnnotationAskTurnRunner,
 ): void {
-  const existing = debounceTimers.get(annotationId);
-  if (existing) clearTimeout(existing);
-
-  const timer = setTimeout(() => {
-    debounceTimers.delete(annotationId);
-    void considerAnnotation(annotationId, runner).catch((err) => {
-      appLogger.warn("Annotation ask: failed to process annotation", err);
-    });
-  }, getDebounceMs());
-  debounceTimers.set(annotationId, timer);
+  void considerAnnotation(annotationId, source, runner).catch((err) => {
+    appLogger.warn("Annotation ask: failed to process annotation", err);
+  });
 }
 
+/**
+ * The user pressed Enter in this annotation's comment editor. The ask runs
+ * once the saved comment matches what they submitted: right away if it is
+ * already saved, else on the reader's next save.
+ */
+export function armAnnotationAsk(
+  annotationId: number,
+  comment: string | null = null,
+): void {
+  if (!isFeatureActive()) return;
+  disarm(annotationId);
+  submitted.set(annotationId, { armedAt: Date.now(), comment });
+  checkAnnotation(annotationId, "submitted", activeRunner);
+  recheckTimers.set(
+    annotationId,
+    setTimeout(() => {
+      recheckTimers.delete(annotationId);
+      checkAnnotation(annotationId, "submitted", activeRunner);
+    }, submitTimingOverride?.recheckMs ?? SUBMIT_RECHECK_MS),
+  );
+}
+
+/**
+ * A UI-created annotation starts with an empty comment, so an "add" that
+ * already carries the trigger was written through the API and asks at once.
+ * A "modify" asks only for a submitted annotation: the reader autosaves
+ * half-typed comments.
+ */
 function handleItemNotification(
   event: string,
   type: string,
@@ -251,8 +302,8 @@ function handleItemNotification(
   for (const rawId of ids) {
     const id = normalizeItemId(rawId);
     if (id === null) continue;
-    if (!getCandidateAnnotation(id)) continue;
-    scheduleAnnotationCheck(id, runner);
+    if (event === "add") checkAnnotation(id, "added", runner);
+    else if (submitted.has(id)) checkAnnotation(id, "submitted", runner);
   }
 }
 
@@ -372,8 +423,9 @@ export function stopAnnotationAskWatch(): void {
     notifierId = null;
     tabNotifierId = null;
   }
-  for (const timer of debounceTimers.values()) clearTimeout(timer);
-  debounceTimers.clear();
+  for (const timer of recheckTimers.values()) clearTimeout(timer);
+  recheckTimers.clear();
+  submitted.clear();
   inFlight.clear();
   tabAttachmentIds.clear();
   paperQueues.clear();
@@ -385,8 +437,10 @@ export function setAnnotationAskTurnRunnerForTests(
   activeRunner = runner;
 }
 
-export function setAnnotationAskDebounceMsForTests(ms: number | null): void {
-  debounceMsOverride = ms;
+export function setAnnotationAskSubmitTimingForTests(
+  timing: { recheckMs: number; ttlMs: number } | null,
+): void {
+  submitTimingOverride = timing;
 }
 
 export function handleAnnotationAskNotificationForTests(
@@ -409,9 +463,10 @@ export function resetAnnotationAskWatchForTests(): void {
   notifierId = null;
   tabNotifierId = null;
   activeRunner = runAnnotationAskTurn;
-  debounceMsOverride = null;
-  for (const timer of debounceTimers.values()) clearTimeout(timer);
-  debounceTimers.clear();
+  submitTimingOverride = null;
+  for (const timer of recheckTimers.values()) clearTimeout(timer);
+  recheckTimers.clear();
+  submitted.clear();
   inFlight.clear();
   tabAttachmentIds.clear();
   paperQueues.clear();

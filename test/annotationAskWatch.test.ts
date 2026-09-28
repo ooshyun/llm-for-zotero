@@ -1,9 +1,10 @@
 import { assert } from "chai";
 import {
+  armAnnotationAsk,
   handleAnnotationAskNotificationForTests,
   handleAnnotationAskTabNotificationForTests,
   resetAnnotationAskWatchForTests,
-  setAnnotationAskDebounceMsForTests,
+  setAnnotationAskSubmitTimingForTests,
   setAnnotationAskTurnRunnerForTests,
 } from "../src/modules/annotationAsk/watch";
 import {
@@ -12,14 +13,14 @@ import {
 } from "../src/modules/annotationAsk/paperSessions";
 import type { AnnotationAskTurnInput } from "../src/modules/annotationAsk/turnRunner";
 
-const TEST_DEBOUNCE_MS = 20;
+const TEST_RECHECK_MS = 20;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitPastDebounce(): Promise<void> {
-  await sleep(TEST_DEBOUNCE_MS + 40);
+async function settle(): Promise<void> {
+  await sleep(TEST_RECHECK_MS + 40);
 }
 
 function createDeferred<T>(): {
@@ -141,7 +142,10 @@ function setupZotero(
 
 describe("annotationAsk/watch", function () {
   beforeEach(function () {
-    setAnnotationAskDebounceMsForTests(TEST_DEBOUNCE_MS);
+    setAnnotationAskSubmitTimingForTests({
+      recheckMs: TEST_RECHECK_MS,
+      ttlMs: 1000,
+    });
   });
 
   afterEach(function () {
@@ -167,8 +171,8 @@ describe("annotationAsk/watch", function () {
       return "요약입니다.";
     });
 
-    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
-    await waitPastDebounce();
+    armAnnotationAsk(annotation.id);
+    await settle();
 
     assert.equal(
       annotation.annotationComment,
@@ -180,8 +184,8 @@ describe("annotationAsk/watch", function () {
     assert.equal(calls[0].title, "Attention Is All You Need");
 
     calls.length = 0;
-    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
-    await waitPastDebounce();
+    armAnnotationAsk(annotation.id);
+    await settle();
     assert.lengthOf(calls, 0);
     assert.equal(
       annotation.annotationComment,
@@ -204,12 +208,12 @@ describe("annotationAsk/watch", function () {
       throw new Error("bridge unreachable");
     });
 
-    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
-    await waitPastDebounce();
+    armAnnotationAsk(annotation.id);
+    await settle();
 
     assert.equal(
       annotation.annotationComment,
-      "@claude 요약해줘\n\nClaude: 실패 (bridge unreachable). 이 블록을 지우면 다시 시도합니다.",
+      "@claude 요약해줘\n\nClaude: 실패 (bridge unreachable). 이 블록을 지우고 Enter를 누르면 다시 시도합니다.",
     );
   });
 
@@ -230,8 +234,8 @@ describe("annotationAsk/watch", function () {
       return "unused";
     });
 
-    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
-    await waitPastDebounce();
+    armAnnotationAsk(annotation.id);
+    await settle();
 
     assert.isFalse(called);
     assert.equal(annotation.annotationComment, "@claude 요약해줘");
@@ -254,8 +258,8 @@ describe("annotationAsk/watch", function () {
       return "unused";
     });
 
-    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
-    await waitPastDebounce();
+    armAnnotationAsk(annotation.id);
+    await settle();
 
     assert.isFalse(called);
     assert.equal(annotation.annotationComment, "@claude 요약해줘");
@@ -279,7 +283,7 @@ describe("annotationAsk/watch", function () {
     });
 
     handleAnnotationAskNotificationForTests("add", "item", [annotation.id]);
-    await waitPastDebounce();
+    await settle();
 
     assert.isFalse(called);
     assert.equal(annotation.annotationComment, "just a note");
@@ -304,7 +308,7 @@ describe("annotationAsk/watch", function () {
     });
 
     handleAnnotationAskNotificationForTests("add", "item", [annotation.id]);
-    await waitPastDebounce();
+    await settle();
 
     assert.isFalse(called);
   });
@@ -324,8 +328,8 @@ describe("annotationAsk/watch", function () {
 
     setAnnotationAskTurnRunnerForTests(async () => "노트 답변");
 
-    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
-    await waitPastDebounce();
+    armAnnotationAsk(annotation.id);
+    await settle();
 
     assert.equal(
       annotation.annotationComment,
@@ -333,10 +337,10 @@ describe("annotationAsk/watch", function () {
     );
   });
 
-  it("debounces rapid modifies while the user is still typing, answering only the settled question", async function () {
+  it("does not answer a saved @claude comment until the user submits it", async function () {
     const parent = createParent();
     const pdf = createPdf();
-    const annotation = createAnnotation(303, 302, "@claude 이");
+    const annotation = createAnnotation(303, 302, "@claude 이게 뭐야?");
     const items = new Map<number, MockItem>([
       [parent.id, parent],
       [pdf.id, pdf],
@@ -344,25 +348,129 @@ describe("annotationAsk/watch", function () {
     ]);
     setupZotero(items);
 
-    const calls: AnnotationAskTurnInput[] = [];
+    const questions: string[] = [];
     setAnnotationAskTurnRunnerForTests(async (input) => {
-      calls.push(input);
-      return "이건 셀프 어텐션입니다.";
+      questions.push(input.question);
+      return "셀프 어텐션입니다.";
     });
 
     handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
-    await sleep(TEST_DEBOUNCE_MS / 2);
+    await settle();
+    assert.deepEqual(questions, []);
+    assert.equal(annotation.annotationComment, "@claude 이게 뭐야?");
+
+    armAnnotationAsk(annotation.id);
+    await settle();
+    assert.deepEqual(questions, ["이게 뭐야?"]);
+    assert.equal(
+      annotation.annotationComment,
+      "@claude 이게 뭐야?\n\nClaude:\n셀프 어텐션입니다.",
+    );
+  });
+
+  it("waits for the reader to save the submitted comment instead of answering a stale one", async function () {
+    const parent = createParent();
+    const pdf = createPdf();
+    const annotation = createAnnotation(303, 302, "@claude 이게");
+    const items = new Map<number, MockItem>([
+      [parent.id, parent],
+      [pdf.id, pdf],
+      [annotation.id, annotation],
+    ]);
+    setupZotero(items);
+
+    const questions: string[] = [];
+    setAnnotationAskTurnRunnerForTests(async (input) => {
+      questions.push(input.question);
+      return "답변";
+    });
+
+    armAnnotationAsk(annotation.id, "@claude 이게 뭐야?");
+    await settle();
+    assert.deepEqual(questions, []);
 
     annotation.annotationComment = "@claude 이게 뭐야?";
     handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
+    await settle();
+    assert.deepEqual(questions, ["이게 뭐야?"]);
+  });
 
-    await waitPastDebounce();
+  it("rechecks a submitted annotation once the reader's save debounce has passed", async function () {
+    const parent = createParent();
+    const pdf = createPdf();
+    const annotation = createAnnotation(303, 302, "");
+    const items = new Map<number, MockItem>([
+      [parent.id, parent],
+      [pdf.id, pdf],
+      [annotation.id, annotation],
+    ]);
+    setupZotero(items);
 
-    assert.lengthOf(calls, 1);
-    assert.equal(calls[0].question, "이게 뭐야?");
+    const questions: string[] = [];
+    setAnnotationAskTurnRunnerForTests(async (input) => {
+      questions.push(input.question);
+      return "답변";
+    });
+
+    armAnnotationAsk(annotation.id);
+    annotation.annotationComment = "@claude 요약해줘";
+    await settle();
+    assert.deepEqual(questions, ["요약해줘"]);
+  });
+
+  it("drops a submit whose save arrives after it expired", async function () {
+    setAnnotationAskSubmitTimingForTests({ recheckMs: 5, ttlMs: 20 });
+    const parent = createParent();
+    const pdf = createPdf();
+    const annotation = createAnnotation(303, 302, "");
+    const items = new Map<number, MockItem>([
+      [parent.id, parent],
+      [pdf.id, pdf],
+      [annotation.id, annotation],
+    ]);
+    setupZotero(items);
+
+    const questions: string[] = [];
+    setAnnotationAskTurnRunnerForTests(async (input) => {
+      questions.push(input.question);
+      return "답변";
+    });
+
+    armAnnotationAsk(annotation.id);
+    await sleep(40);
+    annotation.annotationComment = "@claude 요약해줘";
+    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
+    await sleep(20);
+    assert.deepEqual(questions, []);
+
+    armAnnotationAsk(annotation.id);
+    await sleep(20);
+    assert.deepEqual(questions, ["요약해줘"]);
+  });
+
+  it("answers an annotation whose comment already asks when it is added", async function () {
+    const parent = createParent();
+    const pdf = createPdf();
+    const annotation = createAnnotation(303, 302, "@claude 요약해줘");
+    const items = new Map<number, MockItem>([
+      [parent.id, parent],
+      [pdf.id, pdf],
+      [annotation.id, annotation],
+    ]);
+    setupZotero(items);
+
+    const questions: string[] = [];
+    setAnnotationAskTurnRunnerForTests(async (input) => {
+      questions.push(input.question);
+      return "답변";
+    });
+
+    handleAnnotationAskNotificationForTests("add", "item", [annotation.id]);
+    await settle();
+    assert.deepEqual(questions, ["요약해줘"]);
     assert.equal(
       annotation.annotationComment,
-      "@claude 이게 뭐야?\n\nClaude:\n이건 셀프 어텐션입니다.",
+      "@claude 요약해줘\n\nClaude:\n답변",
     );
   });
 
@@ -383,8 +491,8 @@ describe("annotationAsk/watch", function () {
       return "요약입니다.";
     });
 
-    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
-    await waitPastDebounce();
+    armAnnotationAsk(annotation.id);
+    await settle();
 
     assert.equal(
       annotation.annotationComment,
@@ -413,10 +521,10 @@ describe("annotationAsk/watch", function () {
       return "답변";
     });
 
-    handleAnnotationAskNotificationForTests("modify", "item", [annotationA.id]);
-    await waitPastDebounce();
-    handleAnnotationAskNotificationForTests("modify", "item", [annotationB.id]);
-    await waitPastDebounce();
+    armAnnotationAsk(annotationA.id);
+    await settle();
+    armAnnotationAsk(annotationB.id);
+    await settle();
 
     assert.lengthOf(conversationKeys, 2);
     assert.equal(conversationKeys[0], conversationKeys[1]);
@@ -447,13 +555,13 @@ describe("annotationAsk/watch", function () {
       return "답변";
     });
 
-    handleAnnotationAskNotificationForTests("modify", "item", [annotationA.id]);
-    await waitPastDebounce();
+    armAnnotationAsk(annotationA.id);
+    await settle();
 
     handleAnnotationAskTabNotificationForTests("close", ["tab-1"]);
 
-    handleAnnotationAskNotificationForTests("modify", "item", [annotationB.id]);
-    await waitPastDebounce();
+    armAnnotationAsk(annotationB.id);
+    await settle();
 
     assert.lengthOf(conversationKeys, 2);
     assert.notEqual(conversationKeys[0], conversationKeys[1]);
@@ -483,8 +591,8 @@ describe("annotationAsk/watch", function () {
       return "답변";
     });
 
-    handleAnnotationAskNotificationForTests("modify", "item", [annotation.id]);
-    await waitPastDebounce();
+    armAnnotationAsk(annotation.id);
+    await settle();
 
     assert.equal(observedKey, expectedKey);
   });
@@ -507,11 +615,9 @@ describe("annotationAsk/watch", function () {
     const blocking = createBlockingRunner();
     setAnnotationAskTurnRunnerForTests(blocking.runner);
 
-    handleAnnotationAskNotificationForTests("modify", "item", [
-      annotationA.id,
-      annotationB.id,
-    ]);
-    await waitPastDebounce();
+    armAnnotationAsk(annotationA.id);
+    armAnnotationAsk(annotationB.id);
+    await settle();
 
     assert.deepEqual(blocking.started, ["첫번째", "두번째"]);
 
@@ -542,11 +648,9 @@ describe("annotationAsk/watch", function () {
     const blocking = createBlockingRunner();
     setAnnotationAskTurnRunnerForTests(blocking.runner);
 
-    handleAnnotationAskNotificationForTests("modify", "item", [
-      annotationA.id,
-      annotationB.id,
-    ]);
-    await waitPastDebounce();
+    armAnnotationAsk(annotationA.id);
+    armAnnotationAsk(annotationB.id);
+    await settle();
 
     assert.deepEqual(blocking.started, ["첫번째"]);
 

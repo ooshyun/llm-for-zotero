@@ -36,7 +36,7 @@ describe("annotationAsk/commentProtocol", function () {
       );
       assert.isNull(
         parseAsk(
-          "@claude 이게 뭐야?\n\nClaude: 실패 (오류). 이 블록을 지우면 다시 시도합니다.",
+          "@claude 이게 뭐야?\n\nClaude: 실패 (오류). 이 블록을 지우고 Enter를 누르면 다시 시도합니다.",
         ),
       );
     });
@@ -67,7 +67,7 @@ describe("annotationAsk/commentProtocol", function () {
     it("renders the failed state", function () {
       assert.equal(
         renderComment(original, { kind: "failed", reason: "타임아웃" }),
-        "@claude 요약해줘\n\nClaude: 실패 (타임아웃). 이 블록을 지우면 다시 시도합니다.",
+        "@claude 요약해줘\n\nClaude: 실패 (타임아웃). 이 블록을 지우고 Enter를 누르면 다시 시도합니다.",
       );
     });
   });
@@ -84,7 +84,7 @@ describe("annotationAsk/commentProtocol", function () {
       );
       assert.equal(
         renderAskBlock({ kind: "failed", reason: "타임아웃" }),
-        "\n\nClaude: 실패 (타임아웃). 이 블록을 지우면 다시 시도합니다.",
+        "\n\nClaude: 실패 (타임아웃). 이 블록을 지우고 Enter를 누르면 다시 시도합니다.",
       );
     });
   });
@@ -133,7 +133,7 @@ describe("annotationAsk/commentProtocol", function () {
           currentComment: "@claude 요약해줘 (급함)\n\nClaude: 답변 작성 중...",
           finalState: { kind: "failed", reason: "타임아웃" },
         }),
-        "@claude 요약해줘 (급함)\n\nClaude: 실패 (타임아웃). 이 블록을 지우면 다시 시도합니다.",
+        "@claude 요약해줘 (급함)\n\nClaude: 실패 (타임아웃). 이 블록을 지우고 Enter를 누르면 다시 시도합니다.",
       );
     });
   });
