@@ -1,4 +1,4 @@
-export const TRIGGER = /@claude\b/i;
+import { MENTION_TRIGGER } from "./mentionAgents";
 
 const ANSWER_MARKER = "\n\nClaude:";
 
@@ -23,11 +23,11 @@ export type ParsedAsk = {
 
 /** Returns null when there is no `@claude` trigger, or an answer marker already exists. */
 export function parseAsk(comment: string): ParsedAsk | null {
-  if (!TRIGGER.test(comment)) return null;
+  if (!MENTION_TRIGGER.test(comment)) return null;
   if (comment.includes(ANSWER_MARKER)) return null;
 
   const original = comment.replace(/\s+$/, "");
-  const question = original.replace(TRIGGER, "").trim();
+  const question = original.replace(MENTION_TRIGGER, "").trim();
 
   return {
     question: question || DEFAULT_QUESTION,

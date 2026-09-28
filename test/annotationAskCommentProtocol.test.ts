@@ -5,18 +5,9 @@ import {
   reconcileFinalComment,
   renderAskBlock,
   renderComment,
-  TRIGGER,
 } from "../src/modules/annotationAsk/commentProtocol";
 
 describe("annotationAsk/commentProtocol", function () {
-  describe("TRIGGER", function () {
-    it("matches @claude case-insensitively as a whole word", function () {
-      assert.isTrue(TRIGGER.test("@claude help"));
-      assert.isTrue(TRIGGER.test("@Claude help"));
-      assert.isFalse(TRIGGER.test("@claudette help"));
-    });
-  });
-
   describe("parseAsk", function () {
     it("returns null for a plain comment with no trigger", function () {
       assert.isNull(parseAsk("just a note"));
