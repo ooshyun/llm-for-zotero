@@ -236,7 +236,20 @@ import {
   setClaudeReasoningModePref,
   setClaudeRuntimeModelPref,
   setClaudeBlockStreamingEnabled,
+  getClaudeBridgeAdapterDir,
+  isClaudeBridgeAutoStartEnabled,
+  setClaudeBridgeAdapterDir,
+  setClaudeBridgeAutoStartEnabled,
 } from "../claudeCode/prefs";
+import {
+  getBridgeState,
+  refreshBridgeState,
+  startBridge,
+  stopBridge,
+  subscribeBridgeState,
+  validateBridgeAdapterDir,
+  type BridgeState,
+} from "../claudeCode/bridgeProcess";
 import {
   isAnnotationAskEnabled,
   setAnnotationAskEnabled,
@@ -932,6 +945,101 @@ async function confirmCodexFullAccess(): Promise<boolean> {
     unregisterDialog();
   }
   return (dialogData as { _lastButtonId?: string })._lastButtonId === "enable";
+}
+
+function describeBridgeState(state: BridgeState): string {
+  switch (state.kind) {
+    case "stopped":
+      return "Bridge: stopped";
+    case "starting":
+      return "Bridge: starting…";
+    case "running":
+      return state.owner === "plugin"
+        ? "Bridge: running (started by Zotero)"
+        : "Bridge: running (outside Zotero)";
+    case "stopping":
+      return "Bridge: stopping…";
+    case "failed":
+      return `Bridge: failed: ${state.reason}`;
+  }
+}
+
+function bindClaudeBridgeControls(win: Window, onRunning: () => void): void {
+  const doc = win.document;
+  const byId = <T extends Element>(suffix: string) =>
+    doc.querySelector(
+      `#${config.addonRef}-claude-bridge-${suffix}`,
+    ) as T | null;
+  const status = byId<HTMLSpanElement>("status");
+  const startButton = byId<HTMLButtonElement>("start");
+  const stopButton = byId<HTMLButtonElement>("stop");
+  const externalHint = byId<HTMLSpanElement>("external-hint");
+  const adapterDirInput = byId<HTMLInputElement>("adapter-dir");
+  const browseButton = byId<HTMLButtonElement>("adapter-browse");
+  const adapterHint = byId<HTMLSpanElement>("adapter-hint");
+  const autoStartInput = byId<HTMLInputElement>("auto-start");
+  if (!status || !startButton || !stopButton || !adapterDirInput) return;
+
+  let wasRunning = getBridgeState().kind === "running";
+  const render = (state: BridgeState) => {
+    status.textContent = describeBridgeState(state);
+    startButton.disabled = !(
+      state.kind === "stopped" || state.kind === "failed"
+    );
+    stopButton.disabled = !(
+      state.kind === "starting" ||
+      (state.kind === "running" && state.owner === "plugin")
+    );
+    if (externalHint) {
+      externalHint.hidden = !(
+        state.kind === "running" && state.owner === "external"
+      );
+    }
+    const running = state.kind === "running";
+    if (running && !wasRunning) onRunning();
+    wasRunning = running;
+  };
+  const unsubscribe = subscribeBridgeState(render);
+  win.addEventListener("unload", unsubscribe, { once: true });
+  render(getBridgeState());
+  void refreshBridgeState();
+
+  const showAdapterHint = async (dir: string) => {
+    const hint = dir ? await validateBridgeAdapterDir(dir) : null;
+    if (adapterHint) adapterHint.textContent = hint ?? "";
+  };
+  const commitAdapterDir = (dir: string) => {
+    adapterDirInput.value = dir.trim();
+    setClaudeBridgeAdapterDir(dir);
+    void showAdapterHint(dir.trim());
+  };
+  adapterDirInput.value = getClaudeBridgeAdapterDir();
+  void showAdapterHint(adapterDirInput.value);
+  adapterDirInput.addEventListener("change", () =>
+    commitAdapterDir(adapterDirInput.value),
+  );
+  browseButton?.addEventListener("click", async () => {
+    const picked = await new ztoolkit.FilePicker(
+      "Choose the cc-llm4zotero-adapter folder",
+      "folder",
+      undefined,
+      undefined,
+      win,
+      undefined,
+      adapterDirInput.value || undefined,
+    ).open();
+    if (picked) commitAdapterDir(picked);
+  });
+
+  startButton.addEventListener("click", () => void startBridge());
+  stopButton.addEventListener("click", () => void stopBridge());
+
+  if (autoStartInput) {
+    autoStartInput.checked = isClaudeBridgeAutoStartEnabled();
+    autoStartInput.addEventListener("change", () => {
+      setClaudeBridgeAutoStartEnabled(autoStartInput.checked);
+    });
+  }
 }
 
 // ── Main export ────────────────────────────────────────────────────
@@ -4531,6 +4639,11 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       setClaudeBlockStreamingEnabled(claudeCodeBlockStreamingInput.checked);
     });
   }
+
+  bindClaudeBridgeControls(_window, () => {
+    void refreshClaudeModelSuggestions(true, true);
+    void refreshClaudePermissionOptions();
+  });
 
   if (annotationAskEnabledInput) {
     annotationAskEnabledInput.checked = isAnnotationAskEnabled();

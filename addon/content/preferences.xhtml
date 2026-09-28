@@ -1403,6 +1403,97 @@
                 style="display: none; flex-direction: column; gap: 12px"
               >
                 <html:div class="llm-pref-section">
+                  <html:span class="llm-pref-section-title">Bridge</html:span>
+                  <html:div class="llm-pref-field">
+                    <html:label>Status</html:label>
+                    <html:div class="llm-pref-control">
+                      <html:div class="llm-pref-line llm-pref-line--wrap">
+                        <html:span
+                          id="__addonRef__-claude-bridge-status"
+                          class="llm-pref-hint"
+                          role="status"
+                          aria-live="polite"
+                          style="flex: 1; min-width: 0"
+                          >Bridge: stopped</html:span
+                        >
+                        <html:button
+                          id="__addonRef__-claude-bridge-start"
+                          class="llm-pref-button"
+                          type="button"
+                        >
+                          Start
+                        </html:button>
+                        <html:button
+                          id="__addonRef__-claude-bridge-stop"
+                          class="llm-pref-button"
+                          type="button"
+                        >
+                          Stop
+                        </html:button>
+                      </html:div>
+                      <html:span
+                        id="__addonRef__-claude-bridge-external-hint"
+                        class="llm-pref-hint"
+                        hidden="hidden"
+                      >
+                        This bridge runs outside Zotero (a terminal or a login
+                        service), so Zotero cannot stop it. Stop it where it was
+                        started.
+                      </html:span>
+                    </html:div>
+                  </html:div>
+                  <html:div class="llm-pref-field">
+                    <html:label for="__addonRef__-claude-bridge-adapter-dir">
+                      Adapter folder
+                    </html:label>
+                    <html:div class="llm-pref-control">
+                      <html:div class="llm-pref-line">
+                        <html:input
+                          id="__addonRef__-claude-bridge-adapter-dir"
+                          class="llm-pref-input"
+                          type="text"
+                          placeholder="/path/to/cc-llm4zotero-adapter"
+                          aria-describedby="__addonRef__-claude-bridge-adapter-hint"
+                          style="flex: 1; min-width: 0"
+                        ></html:input>
+                        <html:button
+                          id="__addonRef__-claude-bridge-adapter-browse"
+                          class="llm-pref-button"
+                          type="button"
+                        >
+                          Browse…
+                        </html:button>
+                      </html:div>
+                      <html:span
+                        id="__addonRef__-claude-bridge-adapter-hint"
+                        class="llm-pref-hint"
+                        role="status"
+                        aria-live="polite"
+                      ></html:span>
+                      <html:span class="llm-pref-hint">
+                        The cc-llm4zotero-adapter checkout, with its
+                        dependencies installed. Zotero starts the bridge from
+                        this folder.
+                      </html:span>
+                    </html:div>
+                  </html:div>
+                  <html:div class="llm-pref-field">
+                    <html:label>Startup</html:label>
+                    <html:div class="llm-pref-control">
+                      <html:label class="llm-pref-check">
+                        <html:input
+                          id="__addonRef__-claude-bridge-auto-start"
+                          type="checkbox"
+                        ></html:input>
+                        <html:span
+                          >Start the bridge automatically when Zotero
+                          starts</html:span
+                        >
+                      </html:label>
+                    </html:div>
+                  </html:div>
+                </html:div>
+                <html:div class="llm-pref-section">
                   <html:span class="llm-pref-section-title">Model</html:span>
                   <html:div class="llm-pref-field">
                     <html:label for="__addonRef__-claude-code-model">
