@@ -193,6 +193,40 @@ describe("annotationAsk/watch", function () {
     );
   });
 
+  it("answers a follow-up asked after an earlier answer, threading priorThread", async function () {
+    const parent = createParent();
+    const pdf = createPdf();
+    const answeredThread = "@claude 첫번째 질문\n\nClaude:\n첫번째 답변입니다.";
+    const annotation = createAnnotation(
+      303,
+      302,
+      `${answeredThread}\n\n@claude 두번째 질문`,
+    );
+    const items = new Map<number, MockItem>([
+      [parent.id, parent],
+      [pdf.id, pdf],
+      [annotation.id, annotation],
+    ]);
+    setupZotero(items);
+
+    const calls: AnnotationAskTurnInput[] = [];
+    setAnnotationAskTurnRunnerForTests(async (input) => {
+      calls.push(input);
+      return "두번째 답변입니다.";
+    });
+
+    armAnnotationAsk(annotation.id);
+    await settle();
+
+    assert.lengthOf(calls, 1);
+    assert.equal(calls[0].question, "두번째 질문");
+    assert.equal(calls[0].priorThread, answeredThread);
+    assert.equal(
+      annotation.annotationComment,
+      `${answeredThread}\n\n@claude 두번째 질문\n\nClaude:\n두번째 답변입니다.`,
+    );
+  });
+
   it("writes a failed state when the runner throws", async function () {
     const parent = createParent();
     const pdf = createPdf();
