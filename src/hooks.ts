@@ -331,6 +331,21 @@ function scheduleAnnotationAskWatchRegistration(): void {
   });
 }
 
+function scheduleClaudeBridgeAutoStart(): void {
+  runDeferredStartupTask("Claude Code bridge auto-start", async () => {
+    const { getClaudeBridgeAdapterDir, isClaudeBridgeAutoStartEnabled } =
+      await import("./claudeCode/prefs");
+    if (!isClaudeBridgeAutoStartEnabled() || !getClaudeBridgeAdapterDir()) {
+      return;
+    }
+    const { startBridge } = await import("./claudeCode/bridgeProcess");
+    const state = await startBridge();
+    if (state.kind === "failed") {
+      appLogger.warn(`Claude Code bridge auto-start failed: ${state.reason}`);
+    }
+  });
+}
+
 function scheduleModelCapabilityRefresh(): void {
   if (__env__ === "test") return;
   runDeferredStartupTask("model capability registry", async () => {
@@ -367,6 +382,7 @@ function scheduleDeferredStartupWork(
   scheduleWebChatRelayRegistration();
   scheduleMineruAutoWatchRegistration();
   scheduleAnnotationAskWatchRegistration();
+  scheduleClaudeBridgeAutoStart();
   scheduleModelCapabilityRefresh();
 }
 
@@ -594,6 +610,12 @@ async function onShutdown(): Promise<void> {
     const { stopAnnotationAskWatch } = require("./modules/annotationAsk/watch");
     stopAnnotationAskWatch();
   } catch {}
+  try {
+    const { stopBridge } = require("./claudeCode/bridgeProcess");
+    await stopBridge();
+  } catch {
+    /* ignore if module not loaded */
+  }
   try {
     const { shutdownAgentSubsystem } = require("./agent");
     shutdownAgentSubsystem();

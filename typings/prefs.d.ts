@@ -33,6 +33,8 @@ declare namespace _ZoteroTypes {
       "contextCacheTelemetry": string;
       "enableClaudeCodeMode": boolean;
       "agentBackendBridgeUrl": string;
+      "claudeBridgeAdapterDir": string;
+      "claudeBridgeAutoStart": boolean;
       "agentClaudeConfigSource": string;
       "agentPermissionMode": string;
       "claudeCodePermissionMode": string;
